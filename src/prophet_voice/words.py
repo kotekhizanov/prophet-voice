@@ -1,0 +1,118 @@
+"""The words of the voice: what it hears and what it says.
+
+Each kind has one or more variants, set in the settings. Words heard before
+any audio goes to Whisper (the wake word, the stop words) are heard by Vosk
+with a grammar, so each is one lowercase Russian word; Vosk ignores one it
+does not know. Cancel words are looked for in Whisper's text. What Prophet
+says (the greeting, «Понял») is a phrase, and a variant is picked at random
+each time.
+"""
+
+import random
+import re
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Kind:
+    label: str
+    default: tuple[str, ...]
+    # "vosk": one word for Vosk's grammar; "text": looked for in Whisper's text;
+    # "said": a phrase Prophet says
+    form: str
+    hint: str
+
+
+KINDS = {
+    "wake": Kind("Wake word", ("пророк",), "vosk", "Begins a phrase; the text must begin with it."),
+    "cancel": Kind(
+        "Cancel",
+        ("отмена",),
+        "text",
+        "Said after the wake word: sends nothing, and cancels the answer being prepared.",
+    ),
+    "stop": Kind(
+        "Stop words",
+        ("хватит", "понятно", "понял"),
+        "vosk",
+        "Stop Prophet speaking; what follows at once is the next question.",
+    ),
+    "hello": Kind("Greeting", ("Привет!",), "said", "Said when the voice starts."),
+    "ack": Kind("Question taken", ("Понял.",), "said", "Said when a question is sent."),
+}
+MAX_VARIANTS = 10
+FORMS = {
+    "vosk": (re.compile(r"^[а-яё]{2,30}$"), "one Russian word"),
+    "text": (re.compile(r"^[а-яё][а-яё ]{0,38}[а-яё]$"), "Russian words of up to 40 letters"),
+    "said": (re.compile(r"^\S(?:.{0,98}\S)?$", re.S), "a phrase of up to 100 characters"),
+}
+
+
+def defaults() -> dict[str, list[str]]:
+    return {name: list(kind.default) for name, kind in KINDS.items()}
+
+
+def check(name: str, variants) -> list[str]:
+    """The variants of a kind, trimmed and without repeats; ValueError says what is wrong."""
+    kind = KINDS.get(name)
+    if kind is None:
+        raise ValueError(f"no words {name}")
+    if not isinstance(variants, list) or not all(isinstance(v, str) for v in variants):
+        raise ValueError(f"{kind.label}: a list of variants")
+    pattern, what = FORMS[kind.form]
+    out = []
+    for v in variants:
+        v = " ".join(v.split()) if kind.form != "said" else v.strip()
+        if kind.form != "said":
+            v = v.lower()
+        if not v or v in out:
+            continue
+        if "\n" in v or not pattern.match(v):
+            raise ValueError(f"{kind.label}: «{v[:40]}» is not {what}")
+        out.append(v)
+    if not 1 <= len(out) <= MAX_VARIANTS:
+        raise ValueError(f"{kind.label}: from 1 to {MAX_VARIANTS} variants")
+    return out
+
+
+def pick(variants: list[str]) -> str:
+    return random.choice(variants)  # noqa: S311 - a phrase to say, not a secret
+
+
+# ---- Whisper's text ----------------------------------------------------------------
+
+EDGE = r"\s\"«»'.,!?…—-"  # the hyphen last: elsewhere it would make a range
+
+
+def _variants(variants: list[str], loose: bool = False) -> str:
+    """A variant in Whisper's text: е and ё alike, any spaces; `loose` lets a word
+    come apart ("про рок")."""
+
+    def one(word: str) -> str:
+        chars = [r"\s+" if c == " " else "[её]" if c in "её" else re.escape(c) for c in word]
+        return (r"[\s-]?" if loose else "").join(chars)
+
+    return "|".join(one(v) for v in variants)
+
+
+def after_wake(text: str, wake: list[str]) -> str | None:
+    """The text after a leading wake word, or None when it does not begin with one.
+
+    Vosk may hear the wake word inside other speech, so Whisper's text must
+    begin with it for the phrase to count."""
+    found = re.match(
+        rf"^[{EDGE}]*(?:{_variants(wake, loose=True)})(?![а-яё])[:;{EDGE}]*(.*)$",
+        text,
+        re.I | re.S,
+    )
+    return found[1].strip() if found else None
+
+
+def cancelled(said: str, cancel: list[str]) -> bool:
+    """A phrase dropped: it begins or ends with a cancel word."""
+    words = _variants(cancel)
+    return bool(
+        re.search(
+            rf"^[{EDGE}]*(?:{words})(?![а-яё])|(?<![а-яё])(?:{words})[.!…]*$", said.strip(), re.I
+        )
+    )

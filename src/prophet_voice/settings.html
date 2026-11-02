@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prophet Voice</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f4f4f5; --card: #ffffff; --field: #ffffff; --line: #d4d4d8;
+    --text: #18181b; --muted: #71717a; --accent: #2563eb; --accent-text: #ffffff;
+    --ok: #15803d; --bad: #b91c1c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1f2124; --card: #282a2e; --field: #34373c; --line: #44474d;
+      --text: #e7e7ea; --muted: #a0a3a9; --ok: #4ade80; --bad: #f87171;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  .lead, .hint { color: var(--muted); }
+  .hint { font-size: 13px; margin: 4px 0 0; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+            padding: 16px; margin-top: 16px; }
+  label { display: block; font-weight: 600; font-size: 13px; margin: 12px 0 4px; }
+  label:first-of-type { margin-top: 0; }
+  input, select, textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--line);
+    border-radius: 6px; background: var(--field); color: var(--text); font: inherit; }
+  textarea { min-height: 64px; resize: vertical; }
+  input:focus, select:focus, textarea:focus, button:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 1px; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row > :first-child { flex: 1; }
+  button { padding: 8px 14px; border-radius: 6px; border: 1px solid var(--line);
+           background: var(--field); color: var(--text); font: inherit; cursor: pointer;
+           white-space: nowrap; }
+  button.main { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+  @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
+  .status { min-height: 1.5em; margin-top: 8px; font-size: 13px; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); }
+  footer { position: sticky; bottom: 0; background: var(--bg); padding: 12px 0;
+           display: flex; gap: 12px; align-items: center; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Prophet Voice</h1>
+  <p class="lead">Talk to Prophet aloud. Say the wake word, then your question; Prophet answers in its voice.
+    After saving, restart <code>prophet-voice run</code>.</p>
+
+  <section>
+    <h2>Prophet</h2>
+    <label for="core">Core's address</label>
+    <input id="core" placeholder="http://127.0.0.1:8770" autocomplete="off">
+    <label for="key">Client key</label>
+    <div class="row">
+      <input id="key" type="password" autocomplete="off" placeholder="pk_…">
+      <button type="button" id="check">Check</button>
+    </div>
+    <p class="hint">In Omniscient: Settings → Clients → New key, with the <b>chat</b> scope. It is shown once; paste it here. An empty field keeps the key you saved.</p>
+    <p class="status" id="check-state" role="status"></p>
+    <label for="project">Chat</label>
+    <input id="project" placeholder="the general chat">
+    <p class="hint">A project's name or number, or empty for the general chat.</p>
+  </section>
+
+  <section>
+    <h2>Voice</h2>
+    <label for="speaker">Prophet's voice (Silero)</label>
+    <div class="row">
+      <select id="speaker"></select>
+      <button type="button" id="listen">Listen</button>
+    </div>
+    <p class="status" id="listen-state" role="status"></p>
+    <label for="microphone">Microphone</label>
+    <select id="microphone"></select>
+    <label for="threshold">Wake word's threshold</label>
+    <input id="threshold" type="number" min="0.3" max="0.99" step="0.01">
+    <p class="hint">How sure Vosk must be that it heard the wake word. Higher: fewer false wakes, more missed calls.</p>
+  </section>
+
+  <section>
+    <h2>Speech to text</h2>
+    <div class="grid">
+      <div>
+        <label for="stt">Whisper</label>
+        <select id="stt">
+          <option value="local">On this machine</option>
+          <option value="groq">Groq first, then this machine</option>
+        </select>
+      </div>
+      <div>
+        <label for="whisper_model">Local model</label>
+        <select id="whisper_model"></select>
+      </div>
+    </div>
+    <p class="hint">After changing the local model, run <code>prophet-voice install</code> to download it.</p>
+    <label for="groq_key">Groq key</label>
+    <input id="groq_key" type="password" autocomplete="off" placeholder="gsk_…">
+    <p class="hint" id="groq-hint">Only the phrase after the wake word is sent to Groq.</p>
+  </section>
+
+  <section>
+    <h2>Words</h2>
+    <p class="hint" style="margin-top:0">One variant per line. The wake word and the stop words are heard by Vosk before anything leaves this machine, so each is one Russian word that Vosk's small model knows.</p>
+    <div id="words"></div>
+  </section>
+
+  <footer>
+    <button type="button" class="main" id="save">Save</button>
+    <span class="status" id="save-state" role="status"></span>
+  </footer>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const FIELDS = ["core", "project", "speaker", "microphone", "threshold", "stt", "whisper_model"];
+let options = null;
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+  return data;
+}
+function fill(select, values, labels = {}) {
+  select.replaceChildren(...values.map(v => new Option(labels[v] ?? v, v)));
+}
+function secret(id, value) {
+  const field = $(id);
+  field.value = "";
+  field.placeholder = value.set ? `saved, ends in …${value.hint}` : (id === "key" ? "pk_…" : "gsk_…");
+}
+function show(values) {
+  for (const f of FIELDS) $(f).value = values[f];
+  secret("key", values.key); secret("groq_key", values.groq_key);
+  for (const kind of options.words) $(`w-${kind.name}`).value = values.words[kind.name].join("\n");
+}
+function state(id, text, good) {
+  const el = $(id); el.textContent = text; el.className = "status " + (good ? "ok" : "bad");
+}
+
+async function load() {
+  const data = await api("/api/settings");
+  options = data.options;
+  fill($("speaker"), options.speakers);
+  fill($("whisper_model"), options.whisper_models);
+  fill($("microphone"), ["", ...options.microphones], { "": "The system's microphone" });
+  if (data.values.microphone && !options.microphones.includes(data.values.microphone))
+    $("microphone").append(new Option(`${data.values.microphone} (not found now)`, data.values.microphone));
+  $("words").replaceChildren(...options.words.map(kind => {
+    const box = document.createElement("div");
+    box.innerHTML = `<label for="w-${kind.name}"></label><textarea id="w-${kind.name}" rows="2"></textarea><p class="hint"></p>`;
+    box.querySelector("label").textContent = kind.label;
+    box.querySelector(".hint").textContent = kind.hint;
+    return box;
+  }));
+  show(data.values);
+}
+
+$("save").onclick = async () => {
+  const body = Object.fromEntries(FIELDS.map(f => [f, $(f).value]));
+  body.key = $("key").value; body.groq_key = $("groq_key").value;
+  body.words = Object.fromEntries(options.words.map(k => [k.name, $(`w-${k.name}`).value.split("\n")]));
+  try { show((await api("/api/settings", body)).values); state("save-state", "Saved. Restart prophet-voice run to use them.", true); }
+  catch (err) { state("save-state", err.message, false); }
+};
+$("check").onclick = async () => {
+  state("check-state", "Checking the saved key…", true);
+  try {
+    const me = await api("/api/check", {});
+    if (me.error) state("check-state", me.name ? `client:${me.name}: ${me.error}` : me.error, false);
+    else state("check-state", `The core knows this voice as client:${me.name} (${me.scopes.join(", ")}).`, true);
+  } catch (err) { state("check-state", err.message, false); }
+};
+$("listen").onclick = async () => {
+  state("listen-state", "Loading the voice…", true);
+  try { await api("/api/say", { speaker: $("speaker").value }); state("listen-state", "", true); }
+  catch (err) { state("listen-state", err.message, false); }
+};
+load().catch(err => state("save-state", err.message, false));
+</script>
+</body>
+</html>
