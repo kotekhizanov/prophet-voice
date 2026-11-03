@@ -69,51 +69,46 @@ fallback).
 
 ## Settings
 
-```
-prophet-voice settings
-```
+All of them are in Omniscient, on the voice's page in the menu (Plugins →
+Voice settings), once the voice is added there:
 
-opens a page at http://127.0.0.1:8771/. Set there:
-
-1. **Core's address**: the core as Omniscient opens it, e.g.
-   `http://192.168.1.10:8770` (on the LAN or over ZeroTier). A node that
-   runs the voice (below) gives it its own core's address; one set here
-   wins.
-2. **Client key**: with the settings page open, open Omniscient in a
+1. **Add the voice.** With `prophet-voice run` running, open Omniscient in a
    browser on this Mac, Settings → Plugins → Add plugin, address
    `http://127.0.0.1:8771`. Omniscient reads the voice's manifest
    (`/prophet-plugin.json`: the name `voice`, the `chat` scope), and after
-   you add it hands the new key to the voice (`/prophet/connect`). Reload the
-   settings page and press **Check**. The voice takes a key only from
-   Omniscient at the core's address saved in step 1 (it is the page's
-   origin, so open Omniscient by that same address).
+   you add it hands the new key to the voice (`/prophet/connect`). The voice
+   takes a key only from Omniscient at its core's address, so open
+   Omniscient by that address.
 
-   If a client key named `voice` exists already (made by hand in Settings →
-   Clients), revoke it first: the plugin's key has the plugin's name. A key
-   made by hand still works too: paste it into the field.
-3. The chat (the general one, or a project's), **Listen** to hear Prophet's
-   voice, the microphone, the wake word's threshold, Whisper, and the
-   words: wake and cancel words, the greeting and «Понял».
+   The core's address is `http://127.0.0.1:8770`, or the one a node that
+   runs the voice gives it (below), or `PROPHET_URL`; `"core"` in the
+   settings file wins over them all. If a client key named `voice` exists
+   already (made by hand in Settings → Clients), revoke it first: the
+   plugin's key has the plugin's name.
+2. **Set the rest** on the voice's page: whether the core knows the key
+   (**Check**), the chat (the general one, or a project's), **Listen** to
+   hear Prophet's voice, the microphone, the wake word's threshold, speech
+   to text (Whisper here or Groq first), Whisper's model, the Groq key, and
+   the words: wake and cancel words, the greeting and «Понял». The voice
+   takes them as the next dialog begins; after a change of Whisper's model,
+   run `prophet-voice install`.
+
+The chat, the threshold, speech to text and Whisper's model are the core's
+settings (the modal in Settings → Plugins → Voice → Settings has them too).
+The microphone, the Groq key and the words are this Mac's: the page sets
+them through the voice's own address, and only while the voice runs. The
+Groq key never goes to the core, and the voice never sends it back to the
+page, only its last four characters. The core's address, the client key and
+the port are not set from a page at all.
 
 Omniscient looks at the plugin's address each time its Settings open; with
-the settings page closed it finds nothing and keeps the version it has.
+the voice not running it finds nothing and keeps the version it has.
 A voice switched off in Omniscient does not start, and a node that runs it
 stops it; removing it revokes the key, and the voice waits for a new one.
 
-Some settings can be set in Omniscient too: on the voice's own page in the
-menu (Plugins → Voice), or with its **Settings** button in Settings →
-Plugins. Both write the same values: speech to text, the chat, the wake
-word's threshold and Whisper's model. The form opens with the defaults
-filled in, and once the voice is a plugin what is set there wins over this
-page. Speech to text changes at the next dialog; the rest when the voice
-starts again. The words, the core's address, the client key, the Groq key
-and the microphone are only here: the secrets never go to the core, and the
-rest belongs to this Mac.
-
-The settings are in `~/.config/prophet-voice/settings.json`
+This Mac's settings are in `~/.config/prophet-voice/settings.json`
 (`$PROPHET_VOICE_HOME` moves the whole folder). Only you can read the file:
-it keeps the client key and the Groq key. The page never shows them again,
-only their last four characters.
+it keeps the client key and the Groq key.
 
 ## Run
 
@@ -128,9 +123,6 @@ client key yet, or one the core no longer knows, `run` serves the plugin and
 waits: add the voice in Omniscient (above) and it goes on with the new key.
 `prophet-voice check` tells whether the core knows the key;
 `prophet-voice say "Привет"` reads a text aloud.
-
-`run` serves the settings page itself (and the plugin, for Omniscient), so
-`prophet-voice settings` then only opens it.
 
 ### On a node
 
@@ -150,9 +142,9 @@ The command is the one `./install.sh` installed (`which prophet-voice`). The
 node starts the voice when it connects to the core and stops it when you
 switch the voice off in Omniscient or 30 seconds after the core is gone; a
 voice that exits is started again. It gives the voice the core's address
-(`PROPHET_URL`), used unless the settings page sets one. `GROQ_API_KEY` is
-needed only for speech through Groq, and only when the settings page has no
-Groq key: either way it stays on this Mac. What the voice says goes to the
+(`PROPHET_URL`), used unless the settings file sets one. `GROQ_API_KEY` is
+needed only for speech through Groq, and only when the voice's settings have
+no Groq key: either way it stays on this Mac. What the voice says goes to the
 node's log. macOS asks for the microphone for the program that runs the
 node (its terminal, say): allow it in System Settings → Privacy & Security
 → Microphone if the dialog never opens it.

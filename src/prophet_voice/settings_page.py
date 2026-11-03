@@ -1,28 +1,26 @@
-"""`prophet-voice settings`: the settings as a page on this machine.
+"""The voice's address as a Prophet plugin, on this machine.
 
-It listens on 127.0.0.1 only (`settings_port`, 8771) and writes settings.json
-(`config.save`). The keys are never sent to the page: it shows whether one is
-set and its last four characters, and an empty field keeps it.
-
-Another site open in the browser must not change the settings (say, the
-core's address, to have the key sent elsewhere): a request is served only
-with this page's own Host, a change only as JSON (which a page elsewhere
-cannot send here without asking first) and with no other Origin.
-
-It is also the voice's address as a Prophet plugin (Omniscient's Settings →
-Plugins → Add plugin → http://127.0.0.1:8771): `/prophet-plugin.json` says
-what the voice is and asks for the "chat" scope, and Omniscient hands the
-new key to `/prophet/connect`. Only Omniscient at the core's address in the
-settings may read the plugin (CORS) and hand it a key: a key from elsewhere
-would send what the owner says to another core.
+`prophet-voice run` serves it from its start, so a voice with no key yet can
+be added: Omniscient's Settings → Plugins → Add plugin → http://127.0.0.1:8771
+(`settings_port`), on 127.0.0.1 only. `/prophet-plugin.json` says what the
+voice is and asks for the "chat" scope, and Omniscient hands the new key to
+`/prophet/connect`. Only Omniscient at the core's address in the settings
+may read the plugin (CORS) and talk to it: a key from elsewhere would send
+what the owner says to another core.
 
 The plugin's script, `/omniscient.js`, is the dialog in Omniscient's chat
-(dialog.py). While `prophet-voice run` runs, it serves this page itself (from
-its start, so a voice with no key yet can be added), and the script talks to
-the voice here: `POST /dialog` and `GET /dialog/events`, for Omniscient at
-the core's address only. The manifest's `settings` are the
-ones Omniscient sets too, with this file's defaults (config.PLUGIN_SETTINGS);
-the secrets, the words and this Mac's own stay here.
+(dialog.py: `POST /dialog`, `GET /dialog/events`) and the voice's settings
+page there. The manifest's `settings` are the core's (config.PLUGIN_SETTINGS);
+this Mac's own (MAC: the microphone, the Groq key, the words) the voice keeps
+in settings.json, and the page reads and sets them here (`/api/settings`),
+tries the voice (`/api/say`) and asks whether the core knows the key
+(`/api/check`). A key is never sent back: only whether one is set and its
+last four characters, and an empty field keeps it. The core's address, the
+client key and the port are not set from a page: another core could be given
+the key.
+
+A request is served only with this server's own Host, and a change only as
+JSON (which a page elsewhere cannot send here without asking first).
 """
 
 import json
@@ -30,7 +28,6 @@ import logging
 import re
 import threading
 import time
-import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.metadata import version
 from importlib.resources import files
@@ -63,7 +60,11 @@ PLUGIN = (
     "/dialog",
     "/dialog/end",
     "/dialog/events",
+    "/api/settings",
+    "/api/check",
+    "/api/say",
 )
+MAC = ("microphone", "groq_key", "clear_groq_key", "words")  # what Omniscient sets here
 NOT_RUNNING = "the voice is not ready: is `prophet-voice run` running, with a key?"
 
 
@@ -82,7 +83,7 @@ def origin(url: str) -> str:
 
 
 def options() -> dict:
-    """What the page offers to choose from."""
+    """What Omniscient's page offers to choose from."""
     try:
         from prophet_voice.ears import microphones
 
@@ -190,9 +191,6 @@ class Page(BaseHTTPRequestHandler):
         if urlsplit(self.path).path == "/dialog/events":
             page = parse_qs(urlsplit(self.path).query).get("page", [None])[0]
             return self._events(page if page and PAGE.match(page) else None)
-        if self.path == "/":
-            page = files("prophet_voice").joinpath("settings.html").read_bytes()
-            return self._send(200, page, "text/html; charset=utf-8")
         if self.path == "/api/settings":
             return self._json(200, {"values": config.shown(config.load()), "options": options()})
         self._json(404, {"error": "no such page"})
@@ -206,23 +204,29 @@ class Page(BaseHTTPRequestHandler):
             return self._set_dialog()
         if self.path == "/dialog/end":
             return self._end_dialog()
-        sender = self.headers.get("Origin")
-        if sender and sender != f"http://{self.headers.get('Host')}":
-            return self._json(403, {"error": "not this page"})
+        if self.path not in ("/api/settings", "/api/check", "/api/say"):
+            return self._json(404, {"error": "no such page"})
+        if self._omniscient("the settings") is None:
+            return
         body = self._body()
         if body is None:
             return
         if self.path == "/api/settings":
-            try:
-                saved = config.save(body if isinstance(body, dict) else {})
-            except config.SettingsError as exc:
-                return self._json(422, {"error": str(exc)})
-            return self._json(200, {"values": config.shown(saved)})
+            return self._set(body if isinstance(body, dict) else {})
         if self.path == "/api/check":
             return self._json(200, check_core(config.load()))
-        if self.path == "/api/say":
-            return self._say()
-        self._json(404, {"error": "no such page"})
+        self._say()
+
+    def _set(self, changes: dict) -> None:
+        """This Mac's settings, from Omniscient's page."""
+        other = next((name for name in changes if name not in MAC), None)
+        if other is not None:
+            return self._json(403, {"error": f"{other} is not set from a page"})
+        try:
+            saved = config.save(changes)
+        except config.SettingsError as exc:
+            return self._json(422, {"error": str(exc)})
+        self._json(200, {"values": config.shown(saved)})
 
     def _omniscient(self, what: str) -> str | None:
         """The core's origin when the request is from Omniscient there; else None,
@@ -337,29 +341,8 @@ def start(settings: dict, voice_dialog=None) -> ThreadingHTTPServer | None:
     Page.port, Page.dialog = settings["settings_port"], voice_dialog
     try:
         server = ThreadingHTTPServer(("127.0.0.1", Page.port), Page)
-    except OSError as exc:  # `prophet-voice settings` has the port
+    except OSError as exc:  # another program has the port
         log.warning("no dialog in Omniscient: port %s is taken (%s)", Page.port, exc)
         return None
     threading.Thread(target=server.serve_forever, name="settings", daemon=True).start()
     return server
-
-
-def serve(settings: dict, open_browser: bool = True) -> None:
-    Page.port = settings["settings_port"]
-    url = f"http://127.0.0.1:{Page.port}/"
-    try:
-        server = ThreadingHTTPServer(("127.0.0.1", Page.port), Page)
-    except OSError:  # `prophet-voice run` serves it already
-        print(f"The voice is running; its settings are at {url}")
-        if open_browser:
-            webbrowser.open(url)
-        return
-    print(f"Settings at {url}; Ctrl+C ends.")
-    if open_browser:
-        webbrowser.open(url)
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        server.server_close()

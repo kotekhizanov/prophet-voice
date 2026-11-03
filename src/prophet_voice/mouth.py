@@ -13,7 +13,7 @@ The mouth reads one text after another, a piece at a time, in its own
 thread; the next piece is made while one sounds. `hush` stops it at once.
 While it speaks, the ears do not listen, or Prophet's own «Пророк» would wake
 it; `saying` is the piece being read. Any sound of this process counts as its
-speaking: the settings page's sample is Prophet's voice too.
+speaking: the sample Omniscient's settings ask for is Prophet's voice too.
 
 A cue («Ага?», «Окей…» in a Private dialog) is said in the same voice,
 quieter: its tone is its words and their punctuation (Silero's intonation
@@ -167,7 +167,7 @@ def load_silero(models: Path):
     return say
 
 
-ONE_SOUND = threading.Lock()  # every mouth of this process: the settings page's sample too
+ONE_SOUND = threading.Lock()  # every mouth of this process: the settings' sample too
 
 
 class Speakers:
@@ -215,7 +215,7 @@ class Mouth:
 
     @property
     def speaking(self) -> bool:
-        """This mouth reads, or another of this process sounds (the settings page's
+        """This mouth reads, or another of this process sounds (the settings'
         sample): either way the microphone hears Prophet, not the owner."""
         return self._busy > 0 or ONE_SOUND.locked()
 

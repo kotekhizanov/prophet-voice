@@ -371,7 +371,7 @@ def only_one():
 
 async def new_key(old: str) -> dict:
     """The settings once their key is no longer `old`: Omniscient hands one to
-    the plugin (`/prophet/connect`), or the owner pastes one on the page."""
+    the plugin (`/prophet/connect`)."""
     while (settings := config.load())["key"] == old:
         await asyncio.sleep(KEY_WAIT)
     return settings

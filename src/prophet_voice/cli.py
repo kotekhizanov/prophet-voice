@@ -1,7 +1,6 @@
 """The `prophet-voice` command.
 
 prophet-voice install    the models (the packages come with ./install.sh)
-prophet-voice settings   the settings page, at http://127.0.0.1:8771/
 prophet-voice check      whether the core knows the key
 prophet-voice say TEXT   read a text aloud, to try the voice
 prophet-voice run        listen and speak until Ctrl+C
@@ -20,8 +19,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-v", "--verbose", action="store_true", help="say more in the log")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("install", help="download the models")
-    page = commands.add_parser("settings", help="the settings page")
-    page.add_argument("--no-browser", action="store_true", help="do not open the browser")
     commands.add_parser("check", help="whether the core knows the key")
     say = commands.add_parser("say", help="read a text aloud")
     say.add_argument("text", nargs="+")
@@ -43,11 +40,6 @@ def main(argv: list[str] | None = None) -> int:
         from prophet_voice.install import install
 
         return install(settings)
-    if args.command == "settings":
-        from prophet_voice.settings_page import serve
-
-        serve(settings, open_browser=not args.no_browser)
-        return 0
     if args.command == "check":
         from prophet_voice.settings_page import check_core
 

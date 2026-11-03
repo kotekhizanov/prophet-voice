@@ -25,7 +25,7 @@ serves the plugin and waits for one.
    owner chose it); nothing else leaves the ears.
 3. **No credentials in the repo or in output.** Do not read the owner's
    `~/.config/prophet-voice/settings.json`: it keeps the client key and the
-   Groq key. The settings page never sends a key back.
+   Groq key. The voice never sends a key back to a page.
 4. **Tests use their own settings folder** (`tests/conftest.py` sets
    `PROPHET_VOICE_HOME`) and fakes for Vosk, Whisper, Silero, the speakers
    and the core. Never point a test at a real core.
@@ -45,7 +45,7 @@ uv run --extra audio prophet-voice run   # for real, with a key from your own co
 
 | What | Where |
 |---|---|
-| The command (`install`, `settings`, `check`, `say`, `run`) | `src/prophet_voice/cli.py` |
+| The command (`install`, `check`, `say`, `run`) | `src/prophet_voice/cli.py` |
 | Settings (one JSON file, checked) | `src/prophet_voice/config.py` |
 | Models: Vosk, Silero, Whisper | `src/prophet_voice/install.py`, `install.sh` |
 | The core: /api/v1, events (SSE) | `src/prophet_voice/core.py` |
@@ -55,7 +55,6 @@ uv run --extra audio prophet-voice run   # for real, with a key from your own co
 | Reading aloud: Silero, the speakers | `src/prophet_voice/mouth.py` |
 | The conversation | `src/prophet_voice/voice.py` |
 | The words it hears and says | `src/prophet_voice/words.py` |
-| The settings page | `src/prophet_voice/settings_page.py`, `settings.html` |
-| The plugin: manifest, the key handed by Omniscient, the dialog's API | `src/prophet_voice/settings_page.py` |
-| The dialog in Omniscient: buttons, the cloud of points | `src/prophet_voice/omniscient.js` |
+| The plugin: manifest, the key handed by Omniscient, the dialog's and the settings' API | `src/prophet_voice/settings_page.py` |
+| In Omniscient: the dialog (buttons, the cloud of points) and the settings page | `src/prophet_voice/omniscient.js` |
 | The dialog between the page and the running voice | `src/prophet_voice/dialog.py` |

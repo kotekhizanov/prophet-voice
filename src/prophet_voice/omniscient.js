@@ -34,68 +34,103 @@ const SAID_EVERY = 2000;  // ms between looks at the chat while the dialog's pag
 const SAID_MAX = 30;  // messages shown beside the cloud
 
 // ---- the voice's settings: a page of its own in the menu, under Plugins ---------------
-// One field per setting of the approved manifest (the core checks the values against
-// it), filled from prophet.settings() and saved with the owner's API, as the modal in
-// Settings → Plugins does. prophet.settings() is the page load's until a reload, so the
-// values saved here are kept here.
+// All of them, in one form. The approved manifest's (the chat, the threshold, speech to
+// text) are the core's: filled from prophet.settings() and saved with the owner's API, as
+// the modal in Settings → Plugins does; prophet.settings() is the page load's until a
+// reload, so the values saved here are kept here. This Mac's own (the microphone, the
+// Groq key, the words) the voice keeps, at the plugin's address: it never sends a key
+// back, only whether one is set. The voice takes them all as the next dialog begins.
 function settingsPage(prophet) {
   let now = { ...prophet.settings() }, form = null;
   prophet.on("settings", (values) => { now = { ...values }; if (form) form.fill(); });
   prophet.ui.page({ id: "settings", title: "Voice settings", icon: "puzzle", render(body) { form = drawSettings(prophet, body, () => now, (v) => { now = v; }); } });
 }
 
+const LABELS = { stt: { local: "On this Mac", groq: "Groq first, then this Mac" } };
+
 function drawSettings(prophet, body, values, saved) {
+  const voiceAt = prophet.plugin.address;
   const el = (tag, attrs = {}, ...kids) => {
     const n = document.createElement(tag);
     for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
     n.append(...kids.filter((k) => k != null)); return n;
   };
-  const panel = el("section", { class: "panel" });
-  const fields = el("div", { class: "space-y-4 px-5 py-4" });
+  const voice = async (path, body) => {
+    const r = await fetch(`${voiceAt}${path}`, body === undefined ? {}
+      : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    return data;
+  };
+  const hint = (text) => el("p", { class: "hint mt-1" }, text);
+  const status = () => el("p", { class: "hint", "aria-live": "polite" });
+  const line = "border-t border-zinc-200 dark:border-zinc-800";
+  const section = (title, about, ...kids) => el("div", { class: `space-y-4 px-5 py-4 ${line}` },
+    el("div", {}, el("h3", { class: "section-title" }, title), about ? hint(about) : null), ...kids);
+
+  // The core's settings go into these places; this Mac's are drawn once the voice answers.
+  const slots = { project: el("div"), threshold: el("div"), stt: el("div"), whisper_model: el("div") };
+  const known = el("p", { class: "text-sm", "aria-live": "polite" }, "Asking the voice…");
+  const check = el("button", { type: "button", class: "btn btn-sm" }, "Check");
+  const listen = el("button", { type: "button", class: "btn btn-sm" }, "Listen");
+  const listened = status();
+  const microphone = el("div"), groq = el("div"), words = el("div", { class: "space-y-4" });
   const error = el("span", { class: "mr-auto text-sm text-red-600 dark:text-red-400", "aria-live": "polite" });
   const state = el("span", { class: "hint", "aria-live": "polite" });
   const save = el("button", { type: "submit", class: "btn btn-primary" }, "Save");
-  const form = el("form", {}, fields,
-    el("div", { class: "flex items-center gap-3 border-t border-zinc-200 px-5 py-3 dark:border-zinc-800" }, error, state, save));
-  panel.append(
+  const form = el("form", {},
     el("div", { class: "px-5 py-4" }, el("h3", { class: "section-title" }, "Settings"),
-      el("p", { class: "hint mt-1" }, "Speech to text changes at the next dialog; the rest when the voice starts again. " +
-        "The words, the microphone and the keys stay on the voice's own page on the Mac: ",
-        el("a", { href: `${prophet.plugin.address}/`, target: "_blank", rel: "noopener", class: "underline" }, prophet.plugin.address), ".")),
-    form);
-  body.append(panel);
+      hint("The voice takes them as the next dialog begins. After a change of the local Whisper model, run prophet-voice install on the Mac.")),
+    section("Prophet", null, el("div", { class: "flex items-center gap-3" }, el("div", { class: "mr-auto" }, known), check)),
+    section("Chat", null, slots.project),
+    section("Voice", null,
+      el("div", { class: "flex items-center gap-3" }, el("span", { class: "mr-auto text-sm" }, "Prophet's voice: Silero, baya"), listen),
+      listened, microphone, slots.threshold),
+    section("Speech to text", "Only the phrase you say to Prophet goes to Whisper, and to Groq only when you choose it.",
+      slots.stt, slots.whisper_model, groq),
+    section("Words", "One variant per line. The wake word is heard by Vosk before anything leaves the Mac, so each is one Russian word that Vosk's small model knows.", words),
+    el("div", { class: `flex items-center gap-3 px-5 py-3 ${line}` }, error, state, save));
+  body.append(el("section", { class: "panel" }, form));
 
-  let me = null, specs = {};
+  let me = null, specs = {}, mac = null, options = null;
   const id = (key) => `voice-setting-${key}`;
+  const input = (key) => document.getElementById(id(key));
+  function labelled(key, title, about, field) {
+    return el("div", {}, el("label", { class: "label", for: id(key) }, title), about ? hint(about) : null, field);
+  }
   function field(key, spec) {
     const value = values()[key] ?? spec.default, title = spec.title || key;
-    const about = spec.description ? el("p", { class: "hint mt-1" }, spec.description) : null;
     if (spec.type === "boolean") {
       const box = el("input", { id: id(key), type: "checkbox", class: "size-4 accent-blue-600" }); box.checked = !!value;
-      return el("label", { class: "flex items-start gap-3 text-sm" }, box, el("span", {}, el("span", { class: "font-medium" }, title), about));
+      return el("label", { class: "flex items-start gap-3 text-sm" }, box,
+        el("span", {}, el("span", { class: "font-medium" }, title), spec.description ? hint(spec.description) : null));
     }
-    let input;
+    let field;
     if (spec.enum) {
-      input = el("select", { id: id(key), class: "input mt-1" }, ...spec.enum.map((v) => el("option", { value: String(v) }, String(v))));
-      input.value = String(value);
+      field = el("select", { id: id(key), class: "input mt-1" },
+        ...spec.enum.map((v) => el("option", { value: String(v) }, LABELS[key]?.[v] ?? String(v))));
+      field.value = String(value);
     } else {
       const number = spec.type !== "string";
-      input = el("input", { id: id(key), class: "input mt-1", type: number ? "number" : "text", autocomplete: "off",
+      field = el("input", { id: id(key), class: "input mt-1", type: number ? "number" : "text", autocomplete: "off",
         ...(number ? { step: spec.type === "integer" ? "1" : "any" } : {}),
         ...(spec.minimum !== undefined ? { min: String(spec.minimum) } : {}), ...(spec.maximum !== undefined ? { max: String(spec.maximum) } : {}),
         ...(spec.maxLength ? { maxlength: String(spec.maxLength) } : {}) });
-      input.value = value === undefined ? "" : String(value);
+      field.value = value === undefined ? "" : String(value);
     }
-    return el("div", {}, el("label", { class: "label", for: id(key) }, title), about, input);
+    return labelled(key, title, spec.description, field);
   }
-  function fill() { fields.replaceChildren(...Object.entries(specs).map(([key, spec]) => field(key, spec))); }
-  // What the form says, as the modal reads it: an empty field is the setting's default.
+  function fill() {
+    for (const [key, slot] of Object.entries(slots)) slot.replaceChildren(...(specs[key] ? [field(key, specs[key])] : []));
+  }
+  // What the form says of the core's settings, as the modal reads it: an empty field is the default.
   function read() {
     const out = {};
     for (const [key, spec] of Object.entries(specs)) {
-      const input = document.getElementById(id(key));
-      if (spec.type === "boolean") { out[key] = input.checked; continue; }
-      const raw = input.value;
+      const field = input(key);
+      if (!field) continue;
+      if (spec.type === "boolean") { out[key] = field.checked; continue; }
+      const raw = field.value;
       if (raw === "") continue;
       if (spec.type === "string") out[key] = raw;
       else if (spec.enum) out[key] = spec.enum.find((v) => String(v) === raw);
@@ -103,6 +138,49 @@ function drawSettings(prophet, body, values, saved) {
     }
     return out;
   }
+
+  // ---- this Mac's settings, from the voice ----
+  function fillMac() {
+    const mics = el("select", { id: id("microphone"), class: "input mt-1" },
+      el("option", { value: "" }, "The system's microphone"), ...options.microphones.map((m) => el("option", { value: m }, m)));
+    if (mac.microphone && !options.microphones.includes(mac.microphone))
+      mics.append(el("option", { value: mac.microphone }, `${mac.microphone} (not found now)`));
+    mics.value = mac.microphone;
+    microphone.replaceChildren(labelled("microphone", "Microphone", null, mics));
+    const key = el("input", { id: id("groq_key"), class: "input mt-1", type: "password", autocomplete: "off",
+      placeholder: mac.groq_key.set ? `saved, ends in …${mac.groq_key.hint}` : "gsk_…" });
+    groq.replaceChildren(labelled("groq_key", "Groq key", "Kept on the Mac; an empty field keeps the saved one.", key));
+    words.replaceChildren(...options.words.map((kind) => {
+      const area = el("textarea", { id: id(`w-${kind.name}`), class: "input mt-1", rows: "2" });
+      area.value = mac.words[kind.name].join("\n");
+      return labelled(`w-${kind.name}`, kind.label, kind.hint, area);
+    }));
+  }
+  function readMac() {
+    return { microphone: input("microphone").value, groq_key: input("groq_key").value,
+      words: Object.fromEntries(options.words.map((k) => [k.name, input(`w-${k.name}`).value.split("\n")])) };
+  }
+  function away(err) {
+    const why = `The voice does not answer on this Mac (${err.message}): the microphone, the Groq key and the words are set while it runs.`;
+    for (const slot of [microphone, groq, words]) slot.replaceChildren();
+    words.append(el("p", { class: "text-sm text-red-600 dark:text-red-400" }, why));
+    known.textContent = "The voice is not running on this Mac.";
+  }
+  async function checkKey() {
+    known.textContent = "Asking the core…";
+    try {
+      const r = await voice("/api/check", {});
+      known.textContent = r.error ? (r.name ? `client:${r.name}: ${r.error}` : r.error)
+        : `Prophet at ${mac?.core ?? "its address"} knows this voice as client:${r.name} (${r.scopes.join(", ")}).`;
+    } catch (err) { known.textContent = `The voice does not answer: ${err.message}`; }
+  }
+  check.onclick = checkKey;
+  listen.onclick = async () => {
+    listened.textContent = "Loading the voice…";
+    try { await voice("/api/say", {}); listened.textContent = ""; }
+    catch (err) { listened.textContent = err.message; }
+  };
+
   async function load() {
     try {
       const { plugins } = await prophet.api("/api/plugins");
@@ -110,15 +188,23 @@ function drawSettings(prophet, body, values, saved) {
       if (!me) throw new Error("the voice is not among the plugins");
       specs = me.manifest?.settings?.properties || {};
       fill();
-    } catch (err) { error.textContent = `The settings are not read: ${err.message}`; save.disabled = true; }
+    } catch (err) { error.textContent = `The settings are not read: ${err.message}`; }
+    try {
+      ({ values: mac, options } = await voice("/api/settings"));
+      fillMac(); checkKey();
+    } catch (err) { mac = null; away(err); }
+    save.disabled = !me && !mac;
   }
   form.onsubmit = async (e) => {
     e.preventDefault(); error.textContent = ""; state.textContent = "";
-    if (!me) return;
     save.disabled = true;
     try {
-      const r = await prophet.api(`/api/plugins/${me.id}/settings`, { method: "PUT", body: JSON.stringify({ values: read() }) });
-      saved({ ...r.settings }); fill(); state.textContent = "Saved.";
+      if (me) {
+        const r = await prophet.api(`/api/plugins/${me.id}/settings`, { method: "PUT", body: JSON.stringify({ values: read() }) });
+        saved({ ...r.settings }); fill();
+      }
+      if (mac) { mac = (await voice("/api/settings", readMac())).values; fillMac(); }
+      state.textContent = "Saved. The voice takes them as the next dialog begins.";
     } catch (err) { error.textContent = err.message; }
     finally { save.disabled = false; }
   };
@@ -211,7 +297,7 @@ function dialogPage(prophet) {
 
   // The voice's stream: the picture follows it, and so do the buttons when the dialog was
   // changed elsewhere (another tab) or the voice went away.
-  // A refusal (the settings page alone answers, with no voice running) closes an
+  // A refusal (the plugin's address answers, with no voice ready yet) closes an
   // EventSource for good, so it is opened again a little later.
   function follow() {
     const source = new EventSource(`${voiceAt}/dialog/events?page=${page}`);

@@ -1,4 +1,4 @@
-"""The voice's settings: one JSON file of its own, edited on the settings page.
+"""The voice's settings: one JSON file of its own, set from Omniscient.
 
 The home is $PROPHET_VOICE_HOME, else ~/.config/prophet-voice. It holds
 settings.json (only the owner may read it: it keeps the client key, and a
@@ -148,8 +148,8 @@ CHECKS = {
 # The settings Omniscient sets too (Settings → Plugins → Voice → Settings). None is
 # a secret or this Mac's own (the core's address, the port, the microphone). Each has
 # this file's default, so the form opens filled in, and what the core gives back wins
-# over this file. The words stay on the voice's own page: Prophet's form has one line
-# for a field and does not scroll, so it holds only these few.
+# over this file. The words stay this Mac's, set through the voice's address: Prophet's
+# modal has one line for a field and does not scroll, so it holds only these few.
 def _plugin_settings() -> dict:
     def choice(title: str, options: tuple, name: str, about: str) -> dict:
         return {
@@ -281,7 +281,7 @@ def write(values: dict) -> None:
 
 
 def shown(values: dict) -> dict:
-    """The settings for the page: secrets only as whether they are set, and their end."""
+    """The settings for a page: secrets only as whether they are set, and their end."""
     out = {k: v for k, v in values.items() if k not in SECRETS}
     for name in SECRETS:
         out[name] = {"set": bool(values[name]), "hint": values[name][-4:] if values[name] else ""}

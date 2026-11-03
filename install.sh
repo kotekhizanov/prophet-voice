@@ -4,8 +4,8 @@
 #
 #   ./install.sh
 #
-# Then `prophet-voice settings` (the core's address and a client key) and
-# `prophet-voice run`. Needs uv (https://docs.astral.sh/uv/).
+# Then `prophet-voice run`, and add the voice in Omniscient (Settings → Plugins).
+# Needs uv (https://docs.astral.sh/uv/).
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -18,5 +18,5 @@ bin="$(uv tool dir --bin)"
 
 "${bin}/prophet-voice" install
 echo
-echo "Next: prophet-voice settings   (open the page, set the core and the key)"
-echo "      prophet-voice run        (the first run asks to use the microphone)"
+echo "Next: prophet-voice run   (then in Omniscient: Settings → Plugins → Add plugin,"
+echo "                           http://127.0.0.1:8771; set the voice on its page)"

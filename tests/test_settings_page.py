@@ -23,53 +23,79 @@ def page():
     server.server_close()
 
 
-def test_the_page_and_its_settings(page):
-    r = page.get("/")
-    assert r.status_code == 200 and "Prophet Voice" in r.text
-    data = page.get("/api/settings").json()
+OMNISCIENT = "http://127.0.0.1:8770"  # the core's address in the default settings
+FROM_OMNISCIENT = {"Origin": OMNISCIENT}
+
+
+def test_there_is_no_page_of_its_own(page):
+    assert page.get("/").status_code == 404
+
+
+def test_omniscient_reads_this_macs_settings(page):
+    r = page.get("/api/settings", headers=FROM_OMNISCIENT)
+    assert r.headers["Access-Control-Allow-Origin"] == OMNISCIENT
+    data = r.json()
     assert data["values"]["core"] == "http://127.0.0.1:8770"
     assert "speakers" not in data["options"]  # baya is the only voice
     assert [k["name"] for k in data["options"]["words"]][0] == "wake"
+    r = page.options("/api/settings", headers=FROM_OMNISCIENT)
+    assert r.status_code == 204 and r.headers["Access-Control-Allow-Origin"] == OMNISCIENT
 
 
-def test_saving_keeps_the_key_out_of_the_page(page):
-    r = page.post("/api/settings", json={"key": KEY, "stt": "groq"})
+def test_omniscient_sets_this_macs_settings_and_never_sees_a_key(page):
+    groq = "gsk_" + "c" * 40
+    words = {"wake": ["пророк", "оракул"]}
+    r = page.post(
+        "/api/settings",
+        json={"groq_key": groq, "microphone": "USB", "words": words},
+        headers=FROM_OMNISCIENT,
+    )
     assert r.status_code == 200
-    assert KEY not in r.text
-    assert r.json()["values"]["key"] == {"set": True, "hint": "bbbb"}
-    assert config.load()["key"] == KEY
-    assert config.load()["stt"] == "groq"
-    assert KEY not in page.get("/api/settings").text
+    assert groq not in r.text
+    assert r.json()["values"]["groq_key"] == {"set": True, "hint": "cccc"}
+    settings = config.load()
+    assert settings["groq_key"] == groq and settings["microphone"] == "USB"
+    assert settings["words"]["wake"] == ["пророк", "оракул"]
+    assert groq not in page.get("/api/settings").text
+    # An empty field keeps the key.
+    page.post("/api/settings", json={"groq_key": ""}, headers=FROM_OMNISCIENT)
+    assert config.load()["groq_key"] == groq
 
 
 def test_a_wrong_value_is_refused(page):
-    r = page.post("/api/settings", json={"core": "nowhere"})
+    r = page.post("/api/settings", json={"words": {"wake": ["два слова"]}}, headers=FROM_OMNISCIENT)
     assert r.status_code == 422
-    assert "address" in r.json()["error"]
+    assert "one Russian word" in r.json()["error"]
+
+
+def test_the_core_the_key_and_the_port_are_not_set_from_a_page(page):
+    for name, value in (("core", "http://evil:8770"), ("key", KEY), ("settings_port", 9000)):
+        r = page.post("/api/settings", json={name: value}, headers=FROM_OMNISCIENT)
+        assert r.status_code == 403
+    assert config.load()["core"] == "http://127.0.0.1:8770" and config.load()["key"] == ""
 
 
 def test_another_site_cannot_change_the_settings(page):
     # Not JSON: what a form elsewhere could send without asking.
     r = page.post(
         "/api/settings",
-        content=json.dumps({"core": "http://evil:8770"}),
-        headers={"Content-Type": "text/plain"},
+        content=json.dumps({"microphone": "evil"}),
+        headers={"Content-Type": "text/plain", **FROM_OMNISCIENT},
     )
     assert r.status_code == 403
-    # From a page elsewhere.
-    r = page.post(
-        "/api/settings", json={"core": "http://evil:8770"}, headers={"Origin": "http://evil.com"}
-    )
-    assert r.status_code == 403
+    # From a page elsewhere, or from no page at all.
+    for headers in ({"Origin": "http://evil.com"}, {}):
+        r = page.post("/api/settings", json={"microphone": "evil"}, headers=headers)
+        assert r.status_code == 403
     # Another name for this machine (DNS rebinding).
     r = page.get("/api/settings", headers={"Host": f"evil.com:{Page.port}"})
     assert r.status_code == 403
-    assert config.load()["core"] == "http://127.0.0.1:8770"
+    assert config.load()["microphone"] == ""
 
 
 def test_listen_before_the_install_says_to_install(page, monkeypatch):
     monkeypatch.setattr(settings_page.install, "missing_packages", lambda: ["torch"])
-    r = page.post("/api/say", json={})
+    r = page.post("/api/say", json={}, headers=FROM_OMNISCIENT)
     assert r.status_code == 409 and "install.sh" in r.json()["error"]
 
 
@@ -85,9 +111,6 @@ def test_check_core_says_what_is_wrong():
     assert me["name"] == "voice" and "chat" in me["error"]
     me = settings_page.check_core(settings, get(200, {"name": "voice", "scopes": ["chat"]}))
     assert me == {"name": "voice", "scopes": ["chat"]}
-
-
-OMNISCIENT = "http://127.0.0.1:8770"  # the core's address in the default settings
 
 
 def connect(page, origin=OMNISCIENT, **body):
@@ -113,12 +136,6 @@ def test_omniscient_may_read_the_manifest(page):
     assert r.status_code == 204
     assert r.headers["Access-Control-Allow-Origin"] == OMNISCIENT
     assert "Content-Type" in r.headers["Access-Control-Allow-Headers"]
-
-
-def test_the_settings_are_not_for_omniscient(page):
-    r = page.get("/api/settings", headers={"Origin": OMNISCIENT})
-    assert "Access-Control-Allow-Origin" not in r.headers
-    assert page.options("/api/settings", headers={"Origin": OMNISCIENT}).status_code == 403
 
 
 def test_omniscient_hands_the_voice_its_key(page):

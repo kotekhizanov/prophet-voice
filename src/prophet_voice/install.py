@@ -120,5 +120,5 @@ def install(settings: dict) -> int:
     print(f"Microphones: {', '.join(found) or 'none found'}.")
     if not config.file().exists():
         config.write(config.load())
-    print(f"Ready. Settings: {config.file()}; set them with `prophet-voice settings`.")
+    print("Ready. Run `prophet-voice run` and add the voice in Omniscient: Settings → Plugins.")
     return 0
