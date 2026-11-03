@@ -10,10 +10,9 @@ as it sounds and an abbreviation letter by letter, so "SQL в ClickHouse" is
 read, not skipped.
 
 The mouth reads one text after another, a piece at a time, in its own
-thread; the next piece is made while one sounds. `hush` stops it at once (a
-stop word). While it speaks, the ears do not listen for the wake word, or
-Prophet's own «Пророк» would wake it; `saying` is the piece being read, for
-the ears to know its own words. Any sound of this process counts as its
+thread; the next piece is made while one sounds. `hush` stops it at once.
+While it speaks, the ears do not listen, or Prophet's own «Пророк» would wake
+it; `saying` is the piece being read. Any sound of this process counts as its
 speaking: the settings page's sample is Prophet's voice too.
 
 A cue («Ага?», «Окей…» in a Private dialog) is said in the same voice,

@@ -49,7 +49,7 @@ uv run --extra audio prophet-voice run   # for real, with a key from your own co
 | Settings (one JSON file, checked) | `src/prophet_voice/config.py` |
 | Models: Vosk, Silero, Whisper | `src/prophet_voice/install.py`, `install.sh` |
 | The core: /api/v1, events (SSE) | `src/prophet_voice/core.py` |
-| Wake word, phrases, stop words, the microphone | `src/prophet_voice/ears.py` |
+| Wake word, phrases, the microphone | `src/prophet_voice/ears.py` |
 | Noise suppression of the microphone's audio | `src/prophet_voice/denoise.py` |
 | Speech to text: faster-whisper, Groq | `src/prophet_voice/hearing.py` |
 | Reading aloud: Silero, the speakers | `src/prophet_voice/mouth.py` |

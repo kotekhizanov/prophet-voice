@@ -8,8 +8,8 @@ answer is read aloud, and a question Prophet asks the owner is read too and
 the next phrase, with no wake word, is the answer.
 
 A cancel word after the wake word sends nothing and cancels the answer being
-prepared. A stop word while Prophet speaks hushes it. Prophet never talks over
-the owner: an answer that comes while a phrase is heard waits for its end.
+prepared. While Prophet speaks the voice does not listen. Prophet never
+talks over the owner: an answer that comes while a phrase is heard waits for its end.
 
 Omniscient's dialog button (the plugin's script) sets `dialog`. The
 microphone is open only in a Private dialog: it opens when the owner begins
@@ -152,9 +152,6 @@ class Voice:
 
     def on_drop(self) -> None:
         self.mouth.tone(False)
-
-    def on_stop(self) -> None:
-        self.mouth.hush()
 
     def on_begun(self) -> None:
         self.mouth.cue(words.pick(self.words["begun"]), CUE_VOLUME["begun"])
@@ -426,7 +423,6 @@ async def _run(settings: dict, models) -> None:
         voice.on_wake,
         voice.on_drop,
         voice.on_phrase,
-        voice.on_stop,
         voice.on_begun,
     )
     stop = threading.Event()

@@ -24,7 +24,7 @@ class Recognizers:
     """Vosk as a script: what each recognizer says after its n-th block.
 
     `plan[kind][n]` is the words of an utterance it finishes there; kinds are
-    "wake" (the wake word's grammar), "stops" and "whole" (no grammar, whose
+    "wake" (the wake word's grammar) and "whole" (no grammar, whose
     `final` is `plan["whole"]["final"]`)."""
 
     def __init__(self, plan):
@@ -32,7 +32,7 @@ class Recognizers:
         self.made = []
 
     def __call__(self, grammar):
-        kind = "whole" if grammar is None else "wake" if "пророк" in grammar else "stops"
+        kind = "whole" if grammar is None else "wake"
         r = Recognizer(self.plan.get(kind, {}), kind)
         self.made.append(r)
         return r
@@ -74,13 +74,8 @@ class Ears_:
             on_wake=lambda: self.events.append(("wake",)),
             on_drop=lambda: self.events.append(("drop",)),
             on_phrase=lambda audio, free: self.events.append(("phrase", seconds(audio), free)),
-            on_stop=self.stop,
             on_begun=lambda: self.events.append(("begun",)),
         )
-
-    def stop(self):
-        self.events.append(("stop",))
-        self.mouth.speaking = False
 
     def feed(self, block, n):
         for _ in range(n):
@@ -139,75 +134,53 @@ def test_the_wake_word_with_nothing_after_it_is_dropped():
     assert e.events == [("wake",), ("drop",)]
 
 
-def test_no_wake_word_while_prophet_speaks_nor_just_after():
-    # Prophet says «Пророк» itself until 1.2 s. Vosk reports it while Prophet
-    # speaks, then again just after (the echo), then an utterance that began
-    # while it spoke: none wakes. The owner's own call at 2.4 s does.
+def test_no_wake_word_just_after_prophet_speaks():
+    # Prophet speaks until 1.2 s; the echo of its «Пророк» that Vosk reports
+    # just after does not wake. The owner's own call a second later does.
     e = Ears_(
         {
             "wake": {
-                25: [word("пророк", 0.5, 0.9)],
-                33: [word("пророк", 1.0, 1.3)],
-                45: [word("пророк", 1.1, 1.5)],
-                75: [word("пророк", 2.4, 2.8), word("[unk]", 2.8, 3.0)],
+                5: [word("пророк", 0.0, 0.2)],
+                40: [word("пророк", 1.0, 1.4), word("[unk]", 1.4, 1.5)],
             }
         }
     )
     e.mouth.speaking = True
-    e.feed(quiet(), 5)
-    e.feed(loud(), 25)
+    e.feed(loud(), 30)
     e.mouth.speaking = False
-    e.feed(quiet(), 30)
+    e.feed(loud(), 10)
     assert e.events == []
-    e.feed(loud(), 15)
+    e.feed(quiet(), 30)
     assert e.events == [("wake",)]
 
 
-def test_a_stop_word_hushes_prophet_and_what_follows_is_the_next_question():
-    # The stops' recognizer starts with the first block Prophet speaks (at 0 s);
-    # it hears «хватит» from 1.0 to 1.4 s, and Vosk with its whole vocabulary too.
-    e = Ears_(
-        {
-            "stops": {40: [word("хватит", 1.0, 1.4, conf=0.9)]},
-            "whole": {"final": [word("хватит", 0.1, 0.5)]},
-        }
-    )
+def test_while_prophet_speaks_the_ears_do_not_listen():
+    # Vosk is given nothing then; after it, a new wake recognizer counts its
+    # word times from where it began, so the owner's «Пророк» at 0.4 s of it wakes.
+    e = Ears_({"wake": {20: [word("пророк", 0.4, 0.7), word("[unk]", 0.7, 0.8)]}})
     e.mouth.speaking = True
-    e.mouth.saying = "Сегодня солнечно и тепло"
+    e.feed(loud(), 50)
+    assert len(e.recognizers.made) == 1 and e.recognizers.made[0].n == 0
+    assert e.ears.level == 0 and not e.ears.listening
+    e.mouth.speaking = False
+    e.feed(quiet(), 20)
+    assert e.events == [("wake",)]
+    assert len(e.recognizers.made) == 2
+
+
+def test_a_phrase_begun_goes_on_while_prophet_speaks():
+    # The tone after the wake word sounds while the owner goes on speaking.
+    e = Ears_({"wake": {35: [word("пророк", 1.1, 1.4)]}})
     e.feed(quiet(), 25)
-    e.feed(loud(), 15)
-    assert e.events == [("stop",)]
-    assert e.ears.state == "phrase"
-    e.feed(loud(), 25)  # the next question, with no wake word
+    e.feed(loud(), 10)
+    assert e.events == [("wake",)]
+    e.mouth.speaking = True
+    assert e.ears.listening
+    e.feed(loud(), 10)
+    e.mouth.speaking = False
+    e.feed(loud(), 10)
     e.feed(quiet(), 40)
-    assert e.events[1][0] == "phrase" and e.events[1][2] is True
-
-
-def test_a_stop_word_prophet_says_itself_is_not_a_stop():
-    e = Ears_(
-        {
-            "stops": {40: [word("понял", 1.0, 1.4, conf=0.9)]},
-            "whole": {"final": [word("понял", 0.1, 0.5)]},
-        }
-    )
-    e.mouth.speaking = True
-    e.mouth.saying = "Я понял ваш вопрос"
-    e.feed(quiet(), 25)
-    e.feed(loud(), 15)
-    assert e.events == []
-
-
-def test_a_stop_word_the_whole_vocabulary_does_not_hear_is_not_a_stop():
-    e = Ears_(
-        {
-            "stops": {40: [word("хватит", 1.0, 1.4, conf=0.9)]},
-            "whole": {"final": [word("кватро", 0.1, 0.5)]},
-        }
-    )
-    e.mouth.speaking = True
-    e.feed(quiet(), 25)
-    e.feed(loud(), 15)
-    assert e.events == []
+    assert e.events[1][0] == "phrase" and e.events[1][1] > 0.8
 
 
 def test_listen_free_hears_an_answer_without_the_wake_word():
@@ -327,6 +300,8 @@ class Microphone:
 
 
 class Heard:
+    listening = True
+
     def __init__(self):
         self.blocks = 0
         self.resets = 0

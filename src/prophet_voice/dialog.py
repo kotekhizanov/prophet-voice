@@ -6,7 +6,7 @@ points that breathes, thinks and speaks. It talks to `prophet-voice run`
 through the settings server on this machine: `POST /dialog` begins, changes
 or ends the dialog, and `GET /dialog/events` streams how the voice is now
 (Server-Sent Events): what it does, how loud the owner and Prophet are, and
-its wake and stop words for the captions.
+its wake word for the captions.
 
 A dialog belongs to the page that began it (each page names itself, `page`)
 and lives only while that page is open: when its stream closes (the tab is
@@ -40,7 +40,6 @@ class Dialog:
             "mic": round(ears.level, 3) if ears is not None else 0.0,
             "voice": round(v.mouth.level, 3),
             "wake": v.words["wake"],
-            "stop": v.words["stop"],
         }
 
     def set(self, dialog: str | None, project=None, page: str | None = None) -> None:

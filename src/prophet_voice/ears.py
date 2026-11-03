@@ -1,4 +1,4 @@
-"""Listening: the wake word, the phrase after it, and the stop words.
+"""Listening: the wake word and the phrase after it.
 
 The microphone's audio stays here. Vosk listens with a grammar of the wake
 words and "unknown"; only its final results count, as its partial ones find
@@ -7,13 +7,11 @@ the audio from it on is kept until a pause and goes to Whisper (`on_phrase`).
 Vosk's result comes at the end of an utterance, so a phrase said in one
 breath ("Пророк, что нового?") is already in the ring of recent audio.
 
-While Prophet speaks, the wake word is not heard (it would be Prophet's own),
-and a second recognizer hears only the stop words. A grammar of a few words
-makes one of them of any sound, Prophet's voice too: a stop word counts only
-when Vosk with its whole vocabulary hears it in the same audio and Prophet
-is not saying it. Then Prophet is hushed (`on_stop`) and what the owner says
-at once is the next question, with no wake word. `listen_free` opens such a
-phrase too: after Prophet asks the owner something.
+While Prophet speaks, the ears do not listen (`listening`): the microphone
+hears Prophet, not the owner, and Vosk is given nothing. Only a phrase
+already begun goes on, as the owner goes on speaking under a tone or a cue.
+For DEAF seconds after, Prophet's echo begins nothing. `listen_free` opens
+the next phrase with no wake word: after Prophet asks the owner something.
 
 Alone with the owner (a Private dialog, `alone`), there is no wake word:
 ONSET seconds of voice begin a phrase while Prophet is silent. It is only
@@ -54,8 +52,6 @@ END_SILENCE = 1.4  # seconds of quiet that end the phrase
 VOICE_FROM = 250  # Hz: the loudness that counts as a voice is above it
 NO_PHRASE = 6  # seconds after the wake word with nothing said: back to waiting
 MAX_PHRASE = 60  # seconds
-AFTER_STOP = 4  # seconds after a stop word to begin the next question
-STOP_CONF = 0.85  # Vosk's confidence a stop word needs
 DEAF = 0.5  # seconds after Prophet speaks: its echo dies out
 ONSET = 0.3  # seconds of voice that begin a phrase when alone
 PRE_ROLL = 0.6  # seconds kept from before it: the first syllable starts quieter
@@ -84,7 +80,6 @@ class Ears:
         on_wake,
         on_drop,
         on_phrase,
-        on_stop,
         on_begun=None,
     ):
         """`recognizer(grammar)` makes a Vosk recognizer (`VoskRecognizer`); a
@@ -94,12 +89,7 @@ class Ears:
         self.threshold = threshold
         self.recognizer = recognizer
         self.mouth = mouth
-        self.on_wake, self.on_drop, self.on_phrase, self.on_stop = (
-            on_wake,
-            on_drop,
-            on_phrase,
-            on_stop,
-        )
+        self.on_wake, self.on_drop, self.on_phrase = on_wake, on_drop, on_phrase
         self.on_begun = on_begun or (lambda: None)
         self.clock = 0.0  # seconds of audio heard, as Vosk's word times count them
         self.state = "waiting"  # or "phrase"
@@ -111,9 +101,6 @@ class Ears:
         self.free_for = 0.0  # in a phrase with no wake word: seconds to begin it
         self.was_speaking = False
         self.deaf_until = 0.0
-        self.stops = None
-        self.stops_from = 0.0
-        self.stop_asked = False
         self._free = None  # listen_free's request, taken by the next block
         self.alone = False  # a Private dialog: no wake word
         self.onset = 0.0  # seconds of voice so far, when alone
@@ -121,6 +108,8 @@ class Ears:
         self.check = None  # the whole vocabulary, listening for that word
         self.level = 0.0
         self.wake = recognizer([*words["wake"], "[unk]"])
+        self.wake_from = 0.0  # the clock when `wake` began: its word times count from it
+        self.missed = False  # `wake` was given nothing while Prophet spoke
 
     def listen_free(self, seconds: float) -> None:
         """Hear the next phrase without the wake word (from another thread)."""
@@ -135,11 +124,22 @@ class Ears:
         """The microphone has closed (from the ears' thread): what was heard is gone."""
         self._wait()
         self.recent.clear()
-        self.stops, self._free, self.level = None, None, 0.0
+        self._free, self.level = None, 0.0
+
+    @property
+    def listening(self) -> bool:
+        """Not while Prophet speaks, but for a phrase already begun."""
+        return self.state == "phrase" or not self.mouth.speaking
 
     def hear(self, block: bytes) -> None:
         seconds, at = len(block) / 2 / RATE, self.clock
         self.clock += seconds
+        if not self.listening:
+            self.was_speaking, self.missed, self.level = True, True, 0.0
+            return
+        if self.missed:  # Vosk's times would skip the blocks it was not given
+            self.wake = self.recognizer([*self.words["wake"], "[unk]"])
+            self.wake_from, self.missed = at, False
         voice = self._voice(np.frombuffer(block, np.int16).astype(np.float32) / 32768)
         speaking = self.mouth.speaking
         if self.was_speaking and not speaking:  # what was heard meanwhile was Prophet's own
@@ -150,17 +150,16 @@ class Ears:
             self.recent.append((at, block))
             while self.recent[0][0] < self.clock - RING:
                 self.recent.popleft()
-            if self._free is not None and not speaking:
+            if self._free is not None:
                 self._open(self.clock - 0.3, self._free)
                 self._free = None
                 return
-            if self._break_in(block, speaking):
-                return
             if self.alone:
-                self._begins(voice, seconds, speaking)
+                self._begins(voice, seconds)
                 return
-            if found and not speaking and self.clock >= self.deaf_until:
-                self._heard(found)
+            if found and self.clock >= self.deaf_until:
+                at = self.wake_from
+                self._heard([{**w, "start": w["start"] + at, "end": w["end"] + at} for w in found])
             return
         self.phrase.append(block)
         if voice:
@@ -210,7 +209,6 @@ class Ears:
         self.woke_at = self.last_voice = start
         self.voiced = 0.0
         self.recent.clear()
-        self.stops = None
 
     def _wait(self) -> None:
         self.state, self.phrase, self.free_for = "waiting", [], 0.0
@@ -220,7 +218,7 @@ class Ears:
     def _drop(self) -> None:
         free = bool(self.free_for)
         self._wait()
-        if not free:  # nothing after a stop word or a question: that was all
+        if not free:  # nothing after a question: that was all
             self.on_drop()
 
     def _send(self) -> None:
@@ -230,9 +228,9 @@ class Ears:
 
     # ---- alone: speech begins a phrase ------------------------------------------------
 
-    def _begins(self, voice: bool, seconds: float, speaking: bool) -> None:
+    def _begins(self, voice: bool, seconds: float) -> None:
         """ONSET seconds of voice, with short gaps forgiven, while Prophet is silent."""
-        if speaking or self.clock < self.deaf_until:
+        if self.clock < self.deaf_until:
             self.onset = 0.0
             return
         self.onset = self.onset + seconds if voice else max(0.0, self.onset - seconds / 2)
@@ -257,64 +255,6 @@ class Ears:
             return
         self.tentative, self.check = False, None
         self.on_begun()
-
-    # ---- stop words while Prophet speaks ---------------------------------------------
-
-    def _break_in(self, block: bytes, speaking: bool) -> bool:
-        """A partial result with a stop word only asks for the final one at once:
-        that one's confidence counts."""
-        if not speaking:
-            self.stops = None
-            return False
-        stops = self.words["stop"]
-        if self.stops is None:
-            self.stops = self.recognizer([*stops, "[unk]"])
-            self.stops_from, self.stop_asked = self.clock - len(block) / 2 / RATE, False
-        found = self.stops.accept(block)
-        if found is None and not self.stop_asked:
-            if any(w in stops for w in self.stops.partial().split()):
-                self.stop_asked, found = True, self.stops.final()
-        if found is None:
-            return False
-        self.stop_asked = False
-        words = [
-            {**w, "start": w["start"] + self.stops_from, "end": w["end"] + self.stops_from}
-            for w in found
-        ]
-        return self._stop_word(words)
-
-    def _stop_word(self, words: list[dict]) -> bool:
-        own = (self.mouth.saying or "").lower()
-        stops = self.words["stop"]
-        w = next(
-            (
-                w
-                for w in words
-                if w["word"] in stops and w.get("conf", 1.0) >= STOP_CONF and w["word"] not in own
-            ),
-            None,
-        )
-        if w is None:
-            return False
-        clip = [
-            b
-            for at, b in self.recent
-            if at + len(b) / 2 / RATE > w["start"] - 0.15 and at < w["end"] + 0.15
-        ]
-        if not self._whole_vocabulary_hears(clip, stops):
-            return False
-        self.on_stop()
-        # From the stop word's end on, the audio is the next question, should one follow.
-        self._open(w["end"], AFTER_STOP)
-        return True
-
-    def _whole_vocabulary_hears(self, clip: list[bytes], accepted: list[str]) -> bool:
-        r = self.recognizer(None)
-        heard = []
-        for b in clip:
-            heard += r.accept(b) or []
-        heard += r.final()
-        return any(w["word"] in accepted for w in heard)
 
     # ---- loudness ---------------------------------------------------------------------
 
@@ -438,7 +378,8 @@ def listen(ears: Ears, device: str, on, stop, failed=None) -> None:
                 except queue.Empty:
                     continue
                 try:
-                    ears.hear(quiet(block))
+                    # while the ears do not listen, the denoiser's work is spared
+                    ears.hear(quiet(block) if ears.listening else block)
                 except Exception:
                     log.exception("the ears failed on a block")
         finally:

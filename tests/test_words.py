@@ -37,7 +37,7 @@ def test_check_trims_and_refuses():
     with pytest.raises(ValueError, match="one Russian word"):
         words.check("wake", ["два слова"])
     with pytest.raises(ValueError, match="one Russian word"):
-        words.check("stop", ["stop"])
+        words.check("wake", ["wake"])
     with pytest.raises(ValueError, match="from 1 to"):
         words.check("cancel", [])
     with pytest.raises(ValueError, match="no words"):
@@ -47,7 +47,6 @@ def test_check_trims_and_refuses():
 def test_a_private_phrase_loses_prophets_cue_and_a_wake_word():
     kinds = words.defaults()
     assert words.alone("Ага? Пророк, какая погода?", kinds) == "какая погода?"
-    assert words.alone("Хватит. Что нового", kinds) == "Что нового"
     assert words.alone("Агарь пришла", kinds) == "Агарь пришла"
 
 

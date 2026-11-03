@@ -174,7 +174,7 @@ class FakeDialog:
 
     def snapshot(self):
         return {"dialog": None, "state": "waiting", "mic": 0.0, "voice": 0.0,
-                "wake": ["пророк"], "stop": ["хватит"]}  # fmt: skip
+                "wake": ["пророк"]}  # fmt: skip
 
     def set(self, kind, project=None, page=None):
         self.set_to.append((kind, project))

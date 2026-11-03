@@ -1,8 +1,8 @@
 """The words of the voice: what it hears and what it says.
 
 Each kind has one or more variants, set in the settings. Words heard before
-any audio goes to Whisper (the wake word, the stop words) are heard by Vosk
-with a grammar, so each is one lowercase Russian word; Vosk ignores one it
+any audio goes to Whisper (the wake word) are heard by Vosk with a grammar,
+so each is one lowercase Russian word; Vosk ignores one it
 does not know. Cancel words are looked for in Whisper's text. What Prophet
 says (the greeting, «Понял») is a phrase, and a variant is picked at random
 each time.
@@ -30,12 +30,6 @@ KINDS = {
         ("отмена",),
         "text",
         "Said after the wake word: sends nothing, and cancels the answer being prepared.",
-    ),
-    "stop": Kind(
-        "Stop words",
-        ("хватит", "понятно", "понял"),
-        "vosk",
-        "Stop Prophet speaking; what follows at once is the next question.",
     ),
     "hello": Kind("Greeting", ("Привет!",), "said", "Said when the voice or a dialog starts."),
     "ack": Kind(
@@ -128,9 +122,9 @@ def _letters(variants: list[str]) -> list[str]:
 
 
 def alone(text: str, kinds: dict[str, list[str]]) -> str:
-    """A Private phrase, with no wake word: without a stop word at its start,
-    Prophet's own «Ага» (the microphone hears it) and a wake word said anyway."""
-    rest = _leading(_leading(text.strip(), kinds["stop"]), _letters(kinds["begun"]))
+    """A Private phrase, with no wake word: without Prophet's own «Ага» at its
+    start (the microphone hears it) and a wake word said anyway."""
+    rest = _leading(text.strip(), _letters(kinds["begun"]))
     after = after_wake(rest, kinds["wake"])
     return (after if after is not None else rest).strip()
 

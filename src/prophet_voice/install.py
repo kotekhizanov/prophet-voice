@@ -5,7 +5,7 @@ models into the models folder, each once; run it again after a change of
 Whisper's model, or to repair a model whose download broke:
 
 - Vosk's small Russian model (about 45 MB, Apache-2.0), checked by its
-  SHA-256: it hears the wake word and the stop words;
+  SHA-256: it hears the wake word;
 - Silero v5_ru (about 140 MB): it reads the answers aloud;
 - faster-whisper's model from the settings (large-v3-turbo: about 1.6 GB),
   unless speech goes to Groq: it transcribes the phrases.

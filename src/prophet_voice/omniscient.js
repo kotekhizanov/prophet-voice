@@ -26,7 +26,7 @@ const quoted = (list) => list?.length ? `«${list[0][0].toUpperCase()}${list[0].
 const CAPTIONS = { idle: "Press Private to talk", away: "The voice is not running on this Mac",
   starting: "Opening the microphone…", waiting: (w) => `Say ${quoted(w.wake)} and ask`,
   alone: "I'm listening, just speak", listening: "Listening…", hearing: "Processing voice…", thinking: "Thinking…",
-  speaking: (w) => `Speaking · ${quoted(w.stop)} stops me` };
+  speaking: "Speaking" };
 const SPINNING = new Set(["hearing"]);  // captions with a turning circle beside them
 const IMPULSES = { idle: 0.4, away: 0.2, starting: 0.3, waiting: 0.8, listening: 2, hearing: 4, thinking: 7, speaking: 2 };
 const SETTLE = 1.5;  // seconds the voice has to take a change before this page follows the voice
@@ -161,13 +161,13 @@ function dialogPage(prophet) {
   let dialog = null;   // { private } while this page shows a dialog
   let asked = 0;       // when this page last changed the dialog (performance.now)
   let sentProject;     // the chat the voice was told of
-  const words = () => ({ wake: live?.wake, stop: live?.stop });
+  const words = () => ({ wake: live?.wake });
 
   // Only what changed is set: this runs with every snapshot, twenty times a second.
   function setButtons() {
     const can = !!live, on = !!dialog, w = words();
     const title = !can ? "A dialog needs the voice: run prophet-voice run on the Mac" : on ? "End the dialog (Esc on its page)"
-      : `Just the two of you: the microphone opens, speak and Prophet listens; ${quoted(w.stop)} stops the answer`;
+      : `Just the two of you: the microphone opens, speak and Prophet listens`;
     for (const b of [composer.button, pageButton]) {
       if (b.disabled !== !can) b.disabled = !can;
       if (b.title !== title) b.title = title;

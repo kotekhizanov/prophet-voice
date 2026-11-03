@@ -33,10 +33,9 @@ Everything runs on this machine (a Mac with a microphone and speakers):
   is read aloud by **Silero** (v5_ru), in the voice of baya. When Prophet asks you something, the
   question is read and your next phrase, without the wake word, is the
   answer.
-- While Prophet speaks it does not hear the wake word (it would be its own).
-  A stop word («хватит», «понятно», «понял») stops it, and what you say at
-  once is the next question. Headphones keep Prophet's voice out of the
-  microphone.
+- While Prophet speaks the voice does not listen: the microphone would hear
+  Prophet, not you (its own «Пророк» would wake it). Only a phrase you have
+  begun goes on under the tone or the cue.
 - A cancel word («Пророк, отмена») sends nothing and cancels the answer
   being prepared.
 
@@ -60,7 +59,7 @@ downloads the models into `~/.config/prophet-voice/models`, each once:
 
 | Model | Size | For |
 |---|---|---|
-| Vosk `vosk-model-small-ru-0.22` (checked by SHA-256) | 45 MB | the wake word, the stop words |
+| Vosk `vosk-model-small-ru-0.22` (checked by SHA-256) | 45 MB | the wake word |
 | Silero `v5_ru` | 140 MB | Prophet's voice |
 | faster-whisper `large-v3-turbo` (or the one in the settings) | 1.6 GB | speech to text |
 
@@ -94,7 +93,7 @@ opens a page at http://127.0.0.1:8771/. Set there:
    made by hand still works too: paste it into the field.
 3. The chat (the general one, or a project's), **Listen** to hear Prophet's
    voice, the microphone, the wake word's threshold, Whisper, and the
-   words: wake, cancel and stop words, the greeting and «Понял».
+   words: wake and cancel words, the greeting and «Понял».
 
 Omniscient looks at the plugin's address each time its Settings open; with
 the settings page closed it finds nothing and keeps the version it has.
@@ -183,7 +182,7 @@ the room still starts a question.
 
 The question goes to the chat open in Omniscient, and Prophet never talks
 over you: an answer that comes while you speak waits for the end of your
-phrase. A stop word stops Prophet as always. A button again (by the message
+phrase. A button again (by the message
 field or on the voice's page), or Esc on that page, ends the dialog at once:
 the microphone closes, and
 the voice stops what it says, drops the phrase it was hearing and reads no
