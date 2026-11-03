@@ -7,6 +7,9 @@ local model does it, if it is installed.
 
 Only the phrase after the wake word goes to Whisper: until the wake word,
 the audio stays in the ears.
+
+`timed`: the text and each word with its start and end in seconds, so the
+words of a phrase two people said can be given to each (speakers.py).
 """
 
 import io
@@ -65,27 +68,35 @@ class Hearing:
         if self.stt == "local" or self.local():
             self._ready()
 
-    def transcribe(self, wav: bytes) -> str:
+    def transcribe(self, wav: bytes, timed: bool = False):
+        """The phrase's text; with `timed`, (text, [(start, end, word)])."""
         if self.stt == "groq" and self.groq_key:
             try:
-                return self._groq(wav)
+                return self._groq(wav, timed)
             except Exception as exc:
                 if not self.local():
                     raise RuntimeError(f"Groq could not transcribe: {exc}") from exc
                 log.warning("Groq could not transcribe (%s); the local model does it", exc)
-        return self._local(wav)
+        return self._local(wav, timed)
 
-    def _groq(self, wav: bytes) -> str:
+    def _groq(self, wav: bytes, timed: bool = False):
+        data = {"model": GROQ_MODEL, "language": LANGUAGE, "response_format": "json"}
+        if timed:
+            data.update(response_format="verbose_json", **{"timestamp_granularities[]": "word"})
         r = self._post(
             GROQ_URL,
             headers={"Authorization": f"Bearer {self.groq_key}"},
             files={"file": ("phrase.wav", wav, "audio/wav")},
-            data={"model": GROQ_MODEL, "language": LANGUAGE, "response_format": "json"},
+            data=data,
             timeout=30,
         )
         if r.status_code >= 400:
             raise RuntimeError(f"HTTP {r.status_code}")
-        return str(r.json().get("text") or "").strip()
+        text = str(r.json().get("text") or "").strip()
+        if timed:
+            words = r.json().get("words") or []
+            return text, [(float(w["start"]), float(w["end"]), str(w["word"])) for w in words]
+        return text
 
     def _ready(self):
         with self._lock:
@@ -93,9 +104,15 @@ class Hearing:
                 self._model = self._load(self.models, self.model_name)
             return self._model
 
-    def _local(self, wav: bytes) -> str:
+    def _local(self, wav: bytes, timed: bool = False):
         model = self._ready()
         with self._lock:
             # vad_filter skips silence, where Whisper tends to make up words.
-            segments, _ = model.transcribe(io.BytesIO(wav), language=LANGUAGE, vad_filter=True)
-            return " ".join(s.text.strip() for s in segments).strip()
+            segments, _ = model.transcribe(
+                io.BytesIO(wav), language=LANGUAGE, vad_filter=True, word_timestamps=timed
+            )
+            segments = list(segments)
+            text = " ".join(s.text.strip() for s in segments).strip()
+            if timed:
+                return text, [(w.start, w.end, w.word) for s in segments for w in s.words]
+            return text
