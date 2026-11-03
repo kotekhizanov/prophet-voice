@@ -46,6 +46,17 @@ class Hearing:
         self._model = None
         self._lock = threading.Lock()  # the model is big: one phrase at a time
 
+    def configure(self, settings: dict) -> None:
+        """New settings while it runs: another local model is loaded when next needed."""
+        self.stt, self.groq_key = settings["stt"], settings["groq_key"]
+        if settings["whisper_model"] != self.model_name:
+            with self._lock:
+                self.model_name, self._model = settings["whisper_model"], None
+        log.info(
+            "speech to text: %s",
+            self.stt if self.groq_key or self.stt == "local" else "groq, with no key: local",
+        )
+
     def local(self) -> bool:
         return (model_dir(self.models, self.model_name) / "model.bin").exists()
 

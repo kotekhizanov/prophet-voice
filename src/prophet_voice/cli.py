@@ -28,6 +28,8 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("run", help="listen and speak")
     args = parser.parse_args(argv)
 
+    # A node that runs the voice reads its output through a pipe: a line each time.
+    sys.stdout.reconfigure(line_buffering=True)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -59,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "say":
         from prophet_voice.mouth import Mouth
 
-        mouth = Mouth(settings["speaker"], config.models())
+        mouth = Mouth(config.models())
         try:
             mouth.warm()
         except (RuntimeError, ImportError) as exc:

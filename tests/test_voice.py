@@ -1,4 +1,6 @@
 import asyncio
+import os
+import signal
 import time
 
 import pytest
@@ -7,12 +9,20 @@ from prophet_voice import config, voice
 from prophet_voice.core import CoreError
 from prophet_voice.voice import Voice
 
+KEY = "pk_" + "a" * 43
+
 
 class Core:
-    def __init__(self, events=()):
+    def __init__(self, events=(), plugin=None):
         self.calls = []
         self.events_of = {}
         self.default_events = list(events)
+        self.plugin_settings = plugin
+
+    async def plugin(self):
+        if self.plugin_settings is None:
+            return None
+        return {"plugin": "voice", "enabled": True, "settings": self.plugin_settings}
 
     async def chat(self, text, project):
         self.calls.append(("chat", text, project))
@@ -35,12 +45,16 @@ class Core:
 class Mouth:
     def __init__(self):
         self.said = []
+        self.speaking = False
 
     def say(self, text):
         self.said.append(text)
 
     def tone(self, up):
         self.said.append("↑" if up else "↓")
+
+    def cue(self, text, volume):
+        self.said.append((text, volume))
 
     def hush(self):
         self.said.append("hush")
@@ -52,6 +66,10 @@ class Mouth:
 class Hearing:
     def __init__(self, *texts):
         self.texts = list(texts)
+        self.settings = None
+
+    def configure(self, settings):
+        self.settings = settings
 
     def transcribe(self, audio):
         return self.texts.pop(0)
@@ -60,9 +78,15 @@ class Hearing:
 class Ears:
     def __init__(self):
         self.free = []
+        self.alone = False
+        self.state = "waiting"
+        self.tentative = False
 
     def listen_free(self, seconds):
         self.free.append(seconds)
+
+    def be_alone(self, on):
+        self.alone = on
 
 
 def make(core, *texts, project=""):
@@ -233,6 +257,316 @@ def test_a_refusal_to_start_is_said_with_code_1(capsys):
     assert "no client key" in capsys.readouterr().err
 
 
-def test_run_refuses_without_a_key():
-    with pytest.raises(SystemExit, match="no client key"):
-        asyncio.run(voice.run(config.load(), config.models()))
+class Door:
+    """A core as run() first sees it: the key, and the plugin's state."""
+
+    def __init__(self, scopes=("chat",), plugin=None, error=None):
+        self.scopes, self.plugin_is, self.error = list(scopes), plugin, error
+
+    async def me(self):
+        if self.error:
+            raise self.error
+        return {"name": "voice", "scopes": self.scopes}
+
+    async def plugin(self):
+        return self.plugin_is
+
+
+def test_sigterm_is_taken_as_ctrl_c():
+    cleaned = []
+
+    async def main():
+        try:
+            os.kill(os.getpid(), signal.SIGTERM)  # a node stops the voice
+            await asyncio.sleep(5)
+        finally:
+            cleaned.append("hushed")
+
+    before = signal.getsignal(signal.SIGTERM)
+    assert voice.run_until_stopped(main()) == 0
+    assert cleaned == ["hushed"]
+    assert signal.getsignal(signal.SIGTERM) is before
+
+
+def test_with_no_key_the_voice_waits_for_one(monkeypatch, capsys):
+    monkeypatch.setattr(voice, "KEY_WAIT", 0.01)
+    let_in = []
+
+    class Let(Door):
+        def __init__(self, url, key):
+            super().__init__()
+            let_in.append(key)
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(voice, "Core", Let)
+
+    async def go():
+        waiting = asyncio.create_task(voice.let_in(config.load()))
+        await asyncio.sleep(0.05)
+        assert not waiting.done()
+        config.save({"key": KEY})  # Omniscient hands the plugin its key
+        return await asyncio.wait_for(waiting, 2)
+
+    settings, core, me, plugin = asyncio.run(go())
+    assert settings["key"] == KEY and let_in == [KEY] and me["name"] == "voice"
+    assert "Settings → Plugins → Add plugin, http://127.0.0.1:8771" in capsys.readouterr().out
+
+
+def test_a_key_the_core_does_not_know_waits_for_a_new_one(monkeypatch, capsys):
+    monkeypatch.setattr(voice, "KEY_WAIT", 0.01)
+    revoked, fresh = "pk_" + "r" * 43, KEY
+    config.save({"key": revoked})
+    closed = []
+
+    class Let(Door):
+        def __init__(self, url, key):
+            unknown = CoreError("the core does not know this key", 401)
+            super().__init__(error=unknown if key == revoked else None)
+
+        async def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(voice, "Core", Let)
+
+    async def go():
+        waiting = asyncio.create_task(voice.let_in(config.load()))
+        await asyncio.sleep(0.05)
+        assert not waiting.done() and closed == [True]
+        config.save({"key": fresh})
+        return await asyncio.wait_for(waiting, 2)
+
+    settings, _, me, _ = asyncio.run(go())
+    assert settings["key"] == fresh and me["name"] == "voice"
+    assert "Waiting for a new key from Omniscient" in capsys.readouterr().out
+
+
+def test_the_voice_is_let_in_with_the_chat_scope():
+    me, plugin = asyncio.run(voice.admitted(Door(), "http://core"))
+    assert me["name"] == "voice" and plugin is None
+    on = {"plugin": "voice", "enabled": True, "settings": {"stt": "groq"}}
+    me, plugin = asyncio.run(voice.admitted(Door(plugin=on), "http://core"))
+    assert me["name"] == "voice" and plugin == on
+
+
+def test_the_voice_does_not_start_when_it_cannot_chat():
+    with pytest.raises(SystemExit, match='no "chat" scope'):
+        asyncio.run(voice.admitted(Door(scopes=["tasks"]), "http://core"))
+    with pytest.raises(SystemExit, match="http://core: the core does not answer"):
+        error = CoreError("the core does not answer: refused")
+        asyncio.run(voice.admitted(Door(error=error), "http://core"))
+    with pytest.raises(CoreError):  # an unknown key: a new one may come
+        error = CoreError("the core does not know this key", 401)
+        asyncio.run(voice.admitted(Door(error=error), "http://core"))
+
+
+def test_a_plugin_switched_off_in_omniscient_does_not_start():
+    off = {"plugin": "voice", "enabled": False, "settings": {}}
+    with pytest.raises(SystemExit, match="switched off in Omniscient"):
+        asyncio.run(voice.admitted(Door(plugin=off), "http://core"))
+
+
+def test_a_dialog_greets_and_its_end_hushes():
+    v = make(Core())
+    v.set_dialog("casual", 3)
+    assert v.mouth.said == ["Привет!"] and not v.ears.alone
+    v.set_dialog("private", 3)  # the other button: no second greeting
+    assert v.mouth.said == ["Привет!"] and v.ears.alone
+    v.set_dialog(None)
+    assert v.mouth.said == ["Привет!", "hush"] and not v.ears.alone
+    assert v.dialog is None and v.dialog_project is None
+
+
+def test_a_dialog_asks_in_the_chat_open_in_omniscient():
+    core = Core([("run", {"run_id": 5, "status": "done"})])
+    v = make(core, "Пророк, привет", project="дом")
+    v.set_dialog("casual", 7)
+
+    async def go():
+        await v.handle(b"", False)
+        await settle(v)
+
+    asyncio.run(go())
+    assert core.calls == [("chat", "привет", 7)]
+    assert v.mouth.said == ["Привет!", "Понял."]
+
+
+def test_private_needs_no_wake_word_and_cues_instead_of_ack():
+    core = Core([("run", {"run_id": 5, "status": "done"})])
+    v = make(core, "Ага? Какая погода завтра?")
+    v.set_dialog("private")
+
+    async def go():
+        v.loop = asyncio.get_running_loop()
+        v.on_begun()
+        v.on_phrase(b"", True)
+        await v.handle(*await v.phrases.get())
+        await settle(v)
+
+    asyncio.run(go())
+    assert core.calls == [("chat", "Какая погода завтра?", None)]
+    assert v.mouth.said == ["Привет!", ("Ага?", 0.5), ("Окей…", 0.9)]
+
+
+def test_private_drops_a_phrase_of_its_own_cues():
+    core = Core()
+    v = make(core, "Окей.")
+    v.set_dialog("private")
+    asyncio.run(v.handle(b"", True))
+    assert core.calls == []
+
+
+def test_prophet_does_not_talk_over_the_owner():
+    core = Core(
+        [
+            ("message", {"run_id": 5, "role": "assistant", "content": "Солнечно."}),
+            ("run", {"run_id": 5, "status": "done"}),
+        ]
+    )
+    v = make(core, "Пророк, какая погода?")
+
+    async def go():
+        v.ears.state = "phrase"  # the owner speaks again
+        await v.handle(b"", False)
+        await asyncio.sleep(0.3)
+        assert v.mouth.said == ["Понял."]
+        v.ears.state = "waiting"
+        await settle(v)
+
+    asyncio.run(go())
+    assert v.mouth.said == ["Понял.", "Солнечно."]
+
+
+def test_the_state_the_picture_shows():
+    v = make(Core())
+    assert v.state() == "waiting"
+    v.run_id = 5
+    assert v.state() == "thinking"
+    v.mouth.speaking = True
+    assert v.state() == "speaking"
+    v.hearing_now = 1
+    assert v.state() == "hearing"
+    v.ears.state = "phrase"
+    v.ears.tentative = True  # a sound with no word heard in it yet
+    assert v.state() == "hearing"
+    v.ears.tentative = False
+    assert v.state() == "listening"
+    v.ears = None
+    assert v.state() == "starting"
+
+
+def test_the_microphone_is_open_only_in_a_private_dialog():
+    v = make(Core())
+    assert not v.microphone.is_set()
+    v.set_dialog("casual", 3)
+    assert not v.microphone.is_set()
+    v.set_dialog("private", 3)
+    assert v.microphone.is_set()
+    v.set_dialog("private", 4)  # another chat: the dialog goes on
+    assert v.microphone.is_set() and "hush" not in v.mouth.said
+    v.set_dialog(None)
+    assert not v.microphone.is_set()
+
+
+def test_ending_the_dialog_ends_everything_at_once():
+    core = Core()
+
+    async def endless(run_id):
+        await asyncio.sleep(60)
+        yield "message", {"id": 1, "run_id": run_id, "role": "assistant", "content": "Поздно."}
+
+    core.events = endless
+    v = make(core, "Какая погода?")
+
+    async def go():
+        v.loop = asyncio.get_running_loop()
+        v.set_dialog("private")
+        v.follow(5)
+        following = list(v.followers)
+        v.question = 8
+        v.on_phrase(b"", True)  # heard before the end, sent after it
+        await asyncio.sleep(0)
+        v.set_dialog(None)
+        await v.handle(*await v.phrases.get())
+        await asyncio.sleep(0)
+        return following
+
+    assert all(task.cancelled() for task in asyncio.run(go()))
+    assert core.calls == []  # the phrase heard in the dialog is not sent
+    assert v.question is None and v.run_id is None
+    assert v.mouth.said[-1] == "hush" and "Поздно." not in v.mouth.said
+
+
+def test_a_phrase_being_heard_when_the_dialog_ends_is_dropped():
+    v = make(Core(), "Какая погода?")
+    v.set_dialog("private")
+    era = v.era
+    v.hearing.transcribe = lambda audio: (v.set_dialog(None), "Какая погода?")[1]
+    asyncio.run(v.handle(b"", True, era))
+    assert v.core.calls == []
+
+
+def test_a_message_is_read_once():
+    said = {"id": 11, "run_id": 5, "role": "assistant", "content": "Хорошо."}
+    core = Core([("message", said), ("message", said), ("run", {"run_id": 5, "status": "done"})])
+    v = make(core)
+
+    async def go():
+        v.follow(5)
+        await settle(v)
+
+    asyncio.run(go())
+    assert v.mouth.said == ["Хорошо."]
+
+
+def test_a_microphone_that_will_not_open_ends_the_dialog():
+    v = make(Core())
+
+    async def go():
+        v.loop = asyncio.get_running_loop()
+        v.set_dialog("private")
+        v.on_microphone_failed(OSError("no microphone"))
+        await asyncio.sleep(0)
+
+    asyncio.run(go())
+    assert v.dialog is None and not v.microphone.is_set()
+    assert v.mouth.said[-1] == voice.SAY_NO_MIC
+
+
+def test_only_one_voice_runs_on_this_machine():
+    first = voice.only_one()
+    try:
+        with pytest.raises(SystemExit, match="running already"):
+            voice.only_one()
+    finally:
+        first.close()
+    voice.only_one().close()  # the first one has ended: the next starts
+
+
+def test_a_dialog_begins_with_what_the_owner_set_since_the_start(home):
+    config.save({"stt": "groq", "groq_key": "gsk_test"})  # the settings page, meanwhile
+    v = make(Core(plugin={"whisper_model": "medium"}))  # and Omniscient
+
+    async def go():
+        v.loop = asyncio.get_running_loop()
+        v.set_dialog("private")
+        await v.beginning
+
+    asyncio.run(go())
+    assert v.hearing.settings["stt"] == "groq" and v.hearing.settings["groq_key"] == "gsk_test"
+    assert v.hearing.settings["whisper_model"] == "medium"
+    assert v.mouth.said == ["Привет!"]  # greeted in the hearing set now
+
+
+def test_a_dialog_ended_before_its_settings_are_read_is_not_greeted():
+    v = make(Core(plugin={"whisper_model": "medium"}))
+
+    async def go():
+        v.loop = asyncio.get_running_loop()
+        v.set_dialog("private")
+        v.set_dialog(None)
+        await v.beginning
+
+    asyncio.run(go())
+    assert "Привет!" not in v.mouth.said

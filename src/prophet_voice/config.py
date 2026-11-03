@@ -6,6 +6,12 @@ Groq key if one is set) and the models in models/.
 
 A setting that is missing or no longer valid takes its default, so an old
 file still loads; saving checks every value and refuses a wrong one.
+
+A Prophet node may run the voice (its config's `plugins`). It gives the voice
+the core's address in PROPHET_URL, and may keep the Groq key in the voice's
+env there as GROQ_API_KEY: they stand in for settings the file does not set.
+The file keeps only what the owner set, so a node's address is not written
+into it by a save of something else.
 """
 
 import json
@@ -17,7 +23,6 @@ from urllib.parse import urlsplit
 
 from prophet_voice import words
 
-SPEAKERS = ("xenia", "baya", "kseniya", "aidar", "eugene")  # Silero v5_ru
 WHISPER_MODELS = ("small", "medium", "large-v3", "large-v3-turbo")
 STT = ("local", "groq")
 SECRETS = ("key", "groq_key")  # never shown again, only replaced
@@ -26,7 +31,6 @@ DEFAULTS = {
     "core": "http://127.0.0.1:8770",  # the core's address, as Omniscient's
     "key": "",  # pk_… from Settings → Clients, with the "chat" scope
     "project": "",  # a project's name or number; empty: the general chat
-    "speaker": "xenia",
     "stt": "local",  # local: faster-whisper here; groq: Groq's hosted Whisper first
     "whisper_model": "large-v3-turbo",
     "groq_key": "",
@@ -131,7 +135,6 @@ CHECKS = {
     "core": _core,
     "key": _key,
     "project": _text("the project", 80),
-    "speaker": _choice("the voice", SPEAKERS),
     "stt": _choice("speech to text", STT),
     "whisper_model": _choice("Whisper's model", WHISPER_MODELS),
     "groq_key": _groq_key,
@@ -142,8 +145,74 @@ CHECKS = {
 }
 
 
-def load() -> dict:
-    """The settings: the file's valid values over the defaults."""
+# The settings Omniscient sets too (Settings → Plugins → Voice → Settings). None is
+# a secret or this Mac's own (the core's address, the port, the microphone). Each has
+# this file's default, so the form opens filled in, and what the core gives back wins
+# over this file. The words stay on the voice's own page: Prophet's form has one line
+# for a field and does not scroll, so it holds only these few.
+def _plugin_settings() -> dict:
+    def choice(title: str, options: tuple, name: str, about: str) -> dict:
+        return {
+            "type": "string",
+            "title": title,
+            "description": about,
+            "enum": list(options),
+            "default": DEFAULTS[name],
+        }
+
+    return {
+        "type": "object",
+        "properties": {
+            "stt": choice(
+                "Speech to text", STT, "stt", "local: Whisper on the Mac; groq: Groq first."
+            ),
+            "project": {
+                "type": "string",
+                "title": "The chat",
+                "description": "A project's name or number; empty: the general chat.",
+                "default": DEFAULTS["project"],
+                "maxLength": 80,
+            },
+            "threshold": {
+                "type": "number",
+                "title": "Wake word's threshold",
+                "description": "How sure Vosk must be of the wake word, 0.3–0.99.",
+                "default": DEFAULTS["threshold"],
+                "minimum": 0.3,
+                "maximum": 0.99,
+            },
+            "whisper_model": choice(
+                "Whisper's local model",
+                WHISPER_MODELS,
+                "whisper_model",
+                "After a change, `prophet-voice install` on the Mac.",
+            ),
+        },
+    }
+
+
+PLUGIN_SETTINGS = _plugin_settings()
+
+
+def with_plugin(settings: dict, values: dict) -> tuple[dict, list[str], list[str]]:
+    """The settings with what the owner set in Omniscient over them: the settings,
+    the names taken from Omniscient, and why any other was not."""
+    out = json.loads(json.dumps(settings))
+    used, refused = [], []
+    for name, value in values.items():
+        if name not in PLUGIN_SETTINGS["properties"] or value is None:
+            continue
+        try:
+            out[name] = CHECKS[name](value)
+        except ValueError as exc:  # SettingsError too
+            refused.append(f"{name}: {exc}")
+            continue
+        used.append(name)
+    return out, used, refused
+
+
+def _stored() -> dict:
+    """The file's valid values, and nothing for what it does not set."""
     try:
         stored = json.loads(file().read_text())
     except (OSError, ValueError):
@@ -151,19 +220,38 @@ def load() -> dict:
     stored = stored if isinstance(stored, dict) else {}
     out = {}
     for name, check in CHECKS.items():
-        try:
-            out[name] = check(stored[name]) if name in stored else DEFAULTS[name]
-        except SettingsError:
-            out[name] = DEFAULTS[name]
+        if name in stored:
+            try:
+                out[name] = check(stored[name])
+            except SettingsError:
+                pass
+    return out
+
+
+def _from_node(name: str, variable: str) -> dict:
+    """A setting a node that runs the voice gives in its env, if it fits."""
+    try:
+        value = CHECKS[name](os.environ.get(variable) or "")
+    except SettingsError:
+        return {}
+    return {name: value} if value else {}
+
+
+def load() -> dict:
+    """The settings: the file's valid values over what a node gives and the defaults."""
+    out = {**DEFAULTS, **_from_node("core", "PROPHET_URL"), **_stored()}
+    if not out["groq_key"]:
+        out.update(_from_node("groq_key", "GROQ_API_KEY"))
     return json.loads(json.dumps(out))  # a copy: the defaults stay as they are
 
 
 def save(changes: dict) -> dict:
-    """Check the changed values and write them over the current ones.
+    """Check the changed values, write them over the stored ones, and return
+    the settings now.
 
     An empty secret keeps the stored one: the page never shows it, so it
     cannot send it back. `clear_<secret>` removes one."""
-    current = load()
+    current = _stored()
     for name, value in changes.items():
         if name.startswith("clear_") and name[6:] in SECRETS:
             if value:
@@ -175,7 +263,7 @@ def save(changes: dict) -> dict:
             continue
         current[name] = CHECKS[name](value)
     write(current)
-    return current
+    return load()
 
 
 def write(values: dict) -> None:

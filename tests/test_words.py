@@ -42,3 +42,16 @@ def test_check_trims_and_refuses():
         words.check("cancel", [])
     with pytest.raises(ValueError, match="no words"):
         words.check("nothing", ["да"])
+
+
+def test_a_private_phrase_loses_prophets_cue_and_a_wake_word():
+    kinds = words.defaults()
+    assert words.alone("Ага? Пророк, какая погода?", kinds) == "какая погода?"
+    assert words.alone("Хватит. Что нового", kinds) == "Что нового"
+    assert words.alone("Агарь пришла", kinds) == "Агарь пришла"
+
+
+def test_a_phrase_of_cues_alone_is_not_a_question():
+    kinds = words.defaults()
+    assert words.cue_only("Ага. Окей…", kinds) and words.cue_only("Ок.", kinds)
+    assert not words.cue_only("Окей, а завтра?", kinds) and not words.cue_only("", kinds)

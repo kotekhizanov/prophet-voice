@@ -123,3 +123,15 @@ def test_parse_joins_data_lines_and_skips_comments():
         return [e async for e in core_.parse(lines())]
 
     assert asyncio.run(collect()) == [("9", "question", {"id": 1, "q": "?"})]
+
+
+def test_plugin_is_none_for_a_key_made_by_hand():
+    def handler(request):
+        assert request.url == "http://core:8770/api/v1/plugin/settings"
+        if request.headers["Authorization"] == f"Bearer {KEY}":
+            return httpx.Response(404, json={"detail": "this key is not a plugin's"})
+        return httpx.Response(200, json={"plugin": "voice", "enabled": False, "settings": {}})
+
+    assert asyncio.run(make(handler).plugin()) is None
+    other = Core("http://core:8770", "pk_" + "c" * 43, transport=httpx.MockTransport(handler))
+    assert asyncio.run(other.plugin())["enabled"] is False

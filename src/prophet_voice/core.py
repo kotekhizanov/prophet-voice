@@ -53,7 +53,17 @@ class Core:
         """The key's name and scopes."""
         return await self._call("GET", "/me")
 
-    async def chat(self, text: str, project: str = "") -> int:
+    async def plugin(self) -> dict | None:
+        """{"plugin", "enabled", "settings"} when the key is a plugin's, else None
+        (a key made by hand in Settings → Clients, or a core before plugins)."""
+        try:
+            return await self._call("GET", "/plugin/settings")
+        except CoreError as exc:
+            if exc.status == 404:
+                return None
+            raise
+
+    async def chat(self, text: str, project: str | int | None = "") -> int:
         body = {"text": text, "project": project or None}
         return (await self._call("POST", "/chat", json=body))["run_id"]
 

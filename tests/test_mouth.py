@@ -1,4 +1,6 @@
+import sys
 import threading
+import time
 
 import numpy as np
 
@@ -55,12 +57,12 @@ class Out:
 
 
 def fake_silero(models):
-    return lambda text, speaker: np.ones(len(text), np.int16)
+    return lambda text: np.ones(len(text), np.int16)
 
 
 def test_mouth_reads_texts_in_order(tmp_path):
     out = Out()
-    m = Mouth("xenia", tmp_path, load=fake_silero, out=out)
+    m = Mouth(tmp_path, load=fake_silero, out=out)
     m.say("Первый.")
     m.tone(True)
     m.say("Второй.")
@@ -74,7 +76,7 @@ def test_mouth_reads_texts_in_order(tmp_path):
 def test_hush_stops_now_and_drops_what_was_waiting(tmp_path):
     out = Out()
     out.hold.clear()  # the first piece plays until stopped
-    m = Mouth("xenia", tmp_path, load=fake_silero, out=out)
+    m = Mouth(tmp_path, load=fake_silero, out=out)
     m.say("Длинный ответ.")
     m.say("Ещё один.")
     for _ in range(100):
@@ -87,3 +89,99 @@ def test_hush_stops_now_and_drops_what_was_waiting(tmp_path):
     assert not m.speaking
     assert out.stopped == 1
     assert out.played == [len("Длинный ответ.")]  # the second never played
+
+
+def test_a_cue_is_the_same_voice_quieter(tmp_path):
+    played = []
+
+    class Kept(Out):
+        def play(self, samples, rate):
+            played.append(samples.copy())
+
+    m = Mouth(
+        tmp_path,
+        load=lambda models: lambda text: np.full(9, 1000, np.int16),
+        out=Kept(),
+    )
+    m.cue("Ага?", 0.5)
+    m.say("Ага?")
+    m.wait(5)
+    assert played[0].tolist() == [500] * 9 and played[1].tolist() == [1000] * 9
+
+
+def test_the_level_follows_the_sound_playing_now(tmp_path):
+    out = Out()
+    out.hold.clear()
+    loudly = np.full(mouth.RATE * 2, 16000, np.int16)
+    m = Mouth(tmp_path, load=lambda models: lambda text: loudly, out=out)
+    assert m.level == 0
+    m.say("Длинный ответ.")
+    for _ in range(100):
+        if m.saying:
+            break
+        threading.Event().wait(0.01)
+    assert m.level == 1  # about 0.49 of full scale, times five
+    m.hush()
+    m.wait(5)
+    assert m.level == 0
+
+
+def test_two_mouths_never_sound_together(monkeypatch):
+    """The settings page's sample and the voice's answer: one after the other."""
+    playing, overlaps = [], []
+
+    class Sounddevice:
+        def play(self, samples, rate, **kwargs):
+            if playing:
+                overlaps.append(len(samples))
+            playing.append(len(samples))
+
+        def wait(self):
+            time.sleep(0.05)
+            playing.pop()
+
+        def stop(self):
+            pass
+
+    monkeypatch.setitem(sys.modules, "sounddevice", Sounddevice())
+    speakers = [mouth.Speakers(), mouth.Speakers()]
+    threads = [
+        threading.Thread(target=s.play, args=(np.zeros(10, np.int16), mouth.RATE)) for s in speakers
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert overlaps == []
+
+
+def test_another_mouth_sounding_is_prophet_speaking(tmp_path):
+    """The settings page's sample plays: the ears must not take it for the owner."""
+    m = Mouth(tmp_path, load=fake_silero, out=Out())
+    assert not m.speaking
+    with mouth.ONE_SOUND:
+        assert m.speaking
+    assert not m.speaking
+
+
+def test_the_next_piece_is_made_while_one_sounds(tmp_path):
+    made, out = [], Out()
+    out.hold.clear()
+
+    def silero(models):
+        def say(text):
+            made.append(text)
+            return np.ones(len(text), np.int16)
+
+        return say
+
+    m = Mouth(tmp_path, load=silero, out=out)
+    first, second = "Первое предложение." * 10, "Второе предложение." * 10
+    m.say(first + " " + second)
+    end = time.monotonic() + 3
+    while len(made) < 2 and time.monotonic() < end:
+        time.sleep(0.01)
+    assert len(out.played) == 1 and len(made) == 2  # the first sounds, the second is ready
+    out.hold.set()
+    m.wait(5)
+    assert len(out.played) == 2

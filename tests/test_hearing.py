@@ -59,3 +59,14 @@ def test_no_local_model_asks_to_install(tmp_path):
     h = Hearing(config.load(), tmp_path)
     with pytest.raises((RuntimeError, ImportError)):
         h.transcribe(b"wav")
+
+
+def test_new_settings_while_it_runs(tmp_path):
+    loaded = []
+    h = Hearing(config.load(), tmp_path, load=lambda models, name: loaded.append(name) or Model())
+    h.transcribe(b"")
+    h.configure({**config.load(), "stt": "groq", "groq_key": "gsk_x", "whisper_model": "small"})
+    assert (h.stt, h.groq_key) == ("groq", "gsk_x")
+    h.configure({**config.load(), "whisper_model": "small"})
+    h.transcribe(b"")  # the other model, loaded when needed
+    assert loaded == ["large-v3-turbo", "small"]

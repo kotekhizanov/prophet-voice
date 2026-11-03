@@ -52,7 +52,8 @@
 <main>
   <h1>Prophet Voice</h1>
   <p class="lead">Talk to Prophet aloud. Say the wake word, then your question; Prophet answers in its voice.
-    After saving, restart <code>prophet-voice run</code>.</p>
+    After saving, restart <code>prophet-voice run</code>.
+    Once the voice is a plugin, the chat, the voice, the threshold and Whisper are set in Omniscient (Settings → Plugins → Voice → Settings), and those win over this page.</p>
 
   <section>
     <h2>Prophet</h2>
@@ -63,7 +64,7 @@
       <input id="key" type="password" autocomplete="off" placeholder="pk_…">
       <button type="button" id="check">Check</button>
     </div>
-    <p class="hint">In Omniscient: Settings → Clients → New key, with the <b>chat</b> scope. It is shown once; paste it here. An empty field keeps the key you saved.</p>
+    <p class="hint">Save the core's address first. Then, with this page open, in Omniscient on this Mac: Settings → Plugins → Add plugin → <code id="plugin-address">http://127.0.0.1:8771</code>. Omniscient hands the voice its key; reload this page to see it. Or make a key in Settings → Clients with the <b>chat</b> scope and paste it here. An empty field keeps the key you saved.</p>
     <p class="status" id="check-state" role="status"></p>
     <label for="project">Chat</label>
     <input id="project" placeholder="the general chat">
@@ -72,9 +73,8 @@
 
   <section>
     <h2>Voice</h2>
-    <label for="speaker">Prophet's voice (Silero)</label>
     <div class="row">
-      <select id="speaker"></select>
+      <span>Prophet's voice: Silero, baya</span>
       <button type="button" id="listen">Listen</button>
     </div>
     <p class="status" id="listen-state" role="status"></p>
@@ -119,8 +119,9 @@
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
-const FIELDS = ["core", "project", "speaker", "microphone", "threshold", "stt", "whisper_model"];
+const FIELDS = ["core", "project", "microphone", "threshold", "stt", "whisper_model"];
 let options = null;
+$("plugin-address").textContent = location.origin;
 
 async function api(path, body) {
   const r = await fetch(path, body === undefined ? {} : {
@@ -149,7 +150,6 @@ function state(id, text, good) {
 async function load() {
   const data = await api("/api/settings");
   options = data.options;
-  fill($("speaker"), options.speakers);
   fill($("whisper_model"), options.whisper_models);
   fill($("microphone"), ["", ...options.microphones], { "": "The system's microphone" });
   if (data.values.microphone && !options.microphones.includes(data.values.microphone))
@@ -181,7 +181,7 @@ $("check").onclick = async () => {
 };
 $("listen").onclick = async () => {
   state("listen-state", "Loading the voice…", true);
-  try { await api("/api/say", { speaker: $("speaker").value }); state("listen-state", "", true); }
+  try { await api("/api/say", {}); state("listen-state", "", true); }
   catch (err) { state("listen-state", err.message, false); }
 };
 load().catch(err => state("save-state", err.message, false));

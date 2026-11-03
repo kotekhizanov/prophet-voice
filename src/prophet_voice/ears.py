@@ -15,8 +15,19 @@ is not saying it. Then Prophet is hushed (`on_stop`) and what the owner says
 at once is the next question, with no wake word. `listen_free` opens such a
 phrase too: after Prophet asks the owner something.
 
+Alone with the owner (a Private dialog, `alone`), there is no wake word:
+ONSET seconds of voice begin a phrase while Prophet is silent. It is only
+tentative until Vosk with its whole vocabulary hears a word in it, within
+CONFIRM_WITHIN seconds: a passing bus or a slammed door has none and is
+dropped here, unsaid and unsent. Once a word is heard, `on_begun` says so.
+
 Whether someone speaks is the loudness above VOICE_FROM against the room's
 quiet: a bus's rumble and a room's hum stay mostly below it, a voice does not.
+`level` is that loudness for Omniscient's picture, 0 to 1.
+
+The microphone is open only while it is asked to be (`listen`'s `on`: a
+Private dialog), and its audio comes through the denoiser (denoise.py): the
+room's steady noise is taken out before anything hears it.
 
 The ears run in one thread: `hear` takes the microphone's blocks in order,
 and the callbacks are called from it.
@@ -26,11 +37,14 @@ import io
 import json
 import logging
 import queue
+import re
 import wave
 from collections import deque
 from pathlib import Path
 
 import numpy as np
+
+from prophet_voice.denoise import Denoiser
 
 log = logging.getLogger("prophet_voice.ears")
 RATE = 16000  # Hz: what Vosk's and Whisper's models hear
@@ -43,6 +57,9 @@ MAX_PHRASE = 60  # seconds
 AFTER_STOP = 4  # seconds after a stop word to begin the next question
 STOP_CONF = 0.85  # Vosk's confidence a stop word needs
 DEAF = 0.5  # seconds after Prophet speaks: its echo dies out
+ONSET = 0.3  # seconds of voice that begin a phrase when alone
+PRE_ROLL = 0.6  # seconds kept from before it: the first syllable starts quieter
+CONFIRM_WITHIN = 3  # seconds for Vosk to hear a word in a sound before it is dropped
 VOSK_MODEL = "vosk-model-small-ru-0.22"
 
 
@@ -59,7 +76,16 @@ def wav(blocks: list[bytes], rate: int = RATE) -> bytes:
 
 class Ears:
     def __init__(
-        self, words: dict, threshold: float, recognizer, mouth, on_wake, on_drop, on_phrase, on_stop
+        self,
+        words: dict,
+        threshold: float,
+        recognizer,
+        mouth,
+        on_wake,
+        on_drop,
+        on_phrase,
+        on_stop,
+        on_begun=None,
     ):
         """`recognizer(grammar)` makes a Vosk recognizer (`VoskRecognizer`); a
         grammar of None is Vosk's whole vocabulary. `mouth` says whether
@@ -74,6 +100,7 @@ class Ears:
             on_phrase,
             on_stop,
         )
+        self.on_begun = on_begun or (lambda: None)
         self.clock = 0.0  # seconds of audio heard, as Vosk's word times count them
         self.state = "waiting"  # or "phrase"
         self.recent: deque[tuple[float, bytes]] = deque()
@@ -88,11 +115,27 @@ class Ears:
         self.stops_from = 0.0
         self.stop_asked = False
         self._free = None  # listen_free's request, taken by the next block
+        self.alone = False  # a Private dialog: no wake word
+        self.onset = 0.0  # seconds of voice so far, when alone
+        self.tentative = False  # a phrase begun alone, with no word heard in it yet
+        self.check = None  # the whole vocabulary, listening for that word
+        self.level = 0.0
         self.wake = recognizer([*words["wake"], "[unk]"])
 
     def listen_free(self, seconds: float) -> None:
         """Hear the next phrase without the wake word (from another thread)."""
         self._free = seconds
+
+    def be_alone(self, on: bool) -> None:
+        """A Private dialog begins or ends (from another thread): what was heard
+        before does not count."""
+        self.alone, self.onset, self.waiting_since = on, 0.0, self.clock
+
+    def reset(self) -> None:
+        """The microphone has closed (from the ears' thread): what was heard is gone."""
+        self._wait()
+        self.recent.clear()
+        self.stops, self._free, self.level = None, None, 0.0
 
     def hear(self, block: bytes) -> None:
         seconds, at = len(block) / 2 / RATE, self.clock
@@ -113,6 +156,9 @@ class Ears:
                 return
             if self._break_in(block, speaking):
                 return
+            if self.alone:
+                self._begins(voice, seconds, speaking)
+                return
             if found and not speaking and self.clock >= self.deaf_until:
                 self._heard(found)
             return
@@ -121,6 +167,14 @@ class Ears:
             self.voiced += seconds
             self.last_voice = self.clock
         since = self.clock - self.woke_at
+        if self.tentative:
+            self._confirm(block)
+            if self.tentative and self.clock - self.last_voice > END_SILENCE:
+                self._confirm(None)  # what Vosk makes of it now that it ended
+            if self.tentative:
+                if since > CONFIRM_WITHIN or self.clock - self.last_voice > END_SILENCE:
+                    self._wait()  # a sound with no word in it: nothing was said
+                return
         spoke = self.voiced > 0.25
         if not spoke and since > (self.free_for or NO_PHRASE):
             self._drop()
@@ -161,6 +215,7 @@ class Ears:
     def _wait(self) -> None:
         self.state, self.phrase, self.free_for = "waiting", [], 0.0
         self.waiting_since = self.clock
+        self.tentative, self.check, self.onset = False, None, 0.0
 
     def _drop(self) -> None:
         free = bool(self.free_for)
@@ -172,6 +227,36 @@ class Ears:
         audio, free = wav(self.phrase), bool(self.free_for)
         self._wait()
         self.on_phrase(audio, free)
+
+    # ---- alone: speech begins a phrase ------------------------------------------------
+
+    def _begins(self, voice: bool, seconds: float, speaking: bool) -> None:
+        """ONSET seconds of voice, with short gaps forgiven, while Prophet is silent."""
+        if speaking or self.clock < self.deaf_until:
+            self.onset = 0.0
+            return
+        self.onset = self.onset + seconds if voice else max(0.0, self.onset - seconds / 2)
+        if self.onset < ONSET:
+            return
+        voiced = self.onset
+        self._open(self.clock - voiced - PRE_ROLL, CONFIRM_WITHIN)
+        self.voiced, self.last_voice = voiced, self.clock
+        self.tentative, self.check = True, self.recognizer(None)
+        for b in list(self.phrase):
+            if self.tentative:
+                self._confirm(b)
+
+    def _confirm(self, block: bytes | None) -> None:
+        """A tentative phrase is one once Vosk hears a word in it (None: its end)."""
+        if block is None:
+            text = " ".join(w["word"] for w in self.check.final())
+        else:
+            found = self.check.accept(block)
+            text = self.check.partial() if found is None else " ".join(w["word"] for w in found)
+        if not is_speech(text):
+            return
+        self.tentative, self.check = False, None
+        self.on_begun()
 
     # ---- stop words while Prophet speaks ---------------------------------------------
 
@@ -247,6 +332,7 @@ class Ears:
             total += y2 * y2
         self.hp = (x1, y1, y2)
         rms = (total / max(len(samples), 1)) ** 0.5
+        self.level = min(1.0, max(0.0, (rms - 2 * self.floor) * 12))
         if not self.floor:
             self.floor = rms
         if rms < self.floor:
@@ -254,6 +340,12 @@ class Ears:
         else:
             self.floor = 0.998 * self.floor + 0.002 * rms
         return rms > max(3 * self.floor, 0.002)
+
+
+def is_speech(text: str) -> bool:
+    """A word, not a noise Vosk made one of: a word of three letters, or two words."""
+    found = re.findall(r"[а-яё]+", (text or "").lower())
+    return any(len(w) >= 3 for w in found) or len(found) >= 2
 
 
 # ---- Vosk and the microphone ---------------------------------------------------------
@@ -302,8 +394,11 @@ def microphones() -> list[str]:
     return [d["name"] for d in sd.query_devices() if d["max_input_channels"] > 0]
 
 
-def listen(ears: Ears, device: str, stop) -> None:
-    """The microphone's blocks to the ears until `stop` is set (a threading.Event)."""
+def listen(ears: Ears, device: str, on, stop, failed=None) -> None:
+    """The microphone's blocks, with the room's noise taken out, to the ears while
+    `on` is set, until `stop` is (threading.Events). While `on` is not, the
+    microphone is closed and nothing is heard; `failed(exc)` when it would not
+    open (no microphone, or no permission), and `on` is cleared."""
     import sounddevice as sd
 
     blocks: queue.Queue = queue.Queue()
@@ -313,20 +408,40 @@ def listen(ears: Ears, device: str, stop) -> None:
             log.debug("microphone: %s", status)
         blocks.put(bytes(data))
 
-    with sd.RawInputStream(
-        samplerate=RATE,
-        blocksize=BLOCK,
-        channels=1,
-        dtype="int16",
-        device=device or None,
-        callback=got,
-    ):
-        while not stop.is_set():
-            try:
-                block = blocks.get(timeout=0.5)
-            except queue.Empty:
-                continue
-            try:
-                ears.hear(block)
-            except Exception:
-                log.exception("the ears failed on a block")
+    while not stop.is_set():
+        if not on.wait(0.5):
+            continue
+        while not blocks.empty():  # left from when it was open before
+            blocks.get_nowait()
+        quiet = Denoiser()
+        try:
+            stream = sd.RawInputStream(
+                samplerate=RATE,
+                blocksize=BLOCK,
+                channels=1,
+                dtype="int16",
+                device=device or None,
+                callback=got,
+            )
+            stream.start()
+        except Exception as exc:
+            on.clear()
+            log.error("the microphone would not open: %s", exc)
+            if failed is not None:
+                failed(exc)
+            continue
+        log.info("the microphone is open")
+        try:
+            while on.is_set() and not stop.is_set():
+                try:
+                    block = blocks.get(timeout=0.2)
+                except queue.Empty:
+                    continue
+                try:
+                    ears.hear(quiet(block))
+                except Exception:
+                    log.exception("the ears failed on a block")
+        finally:
+            stream.close()
+            ears.reset()
+            log.info("the microphone is closed")

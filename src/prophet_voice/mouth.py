@@ -10,9 +10,17 @@ as it sounds and an abbreviation letter by letter, so "SQL в ClickHouse" is
 read, not skipped.
 
 The mouth reads one text after another, a piece at a time, in its own
-thread. `hush` stops it at once (a stop word). While it speaks, the ears do
-not listen for the wake word, or Prophet's own «Пророк» would wake it;
-`saying` is the piece being read, for the ears to know its own words.
+thread; the next piece is made while one sounds. `hush` stops it at once (a
+stop word). While it speaks, the ears do not listen for the wake word, or
+Prophet's own «Пророк» would wake it; `saying` is the piece being read, for
+the ears to know its own words. Any sound of this process counts as its
+speaking: the settings page's sample is Prophet's voice too.
+
+A cue («Ага?», «Окей…» in a Private dialog) is said in the same voice,
+quieter: its tone is its words and their punctuation (Silero's intonation
+follows them), never pitch or speed, or the voice would be another one's.
+`level` is how loud the sound playing now is, 0 to 1, for Omniscient's
+picture.
 """
 
 import logging
@@ -21,16 +29,19 @@ import re
 import threading
 import time
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
 
 log = logging.getLogger("prophet_voice.mouth")
 MODEL = "v5_ru"
+SPEAKER = "baya"  # Prophet's voice: the one Silero speaker it has
 MODEL_URL = "https://models.silero.ai/models/tts/ru/{}.pt"
 RATE = 24000  # Hz: clear speech at half the bytes of 48 kHz
 PIECE = 300  # characters Silero reads at once; longer sentences are cut at a comma
 PAUSE = 0.25  # seconds of silence between pieces
+LEVEL_WINDOW = 1024  # samples around the one playing now that make `level`
 
 # The English names of letters, for abbreviations ("SQL": эс-кью-эл).
 LETTERS = dict(
@@ -132,7 +143,7 @@ def model_file(models: Path) -> Path:
 
 
 def load_silero(models: Path):
-    """Silero as a function: a piece of text and a speaker to 16-bit samples."""
+    """Silero as a function: a piece of text to 16-bit samples, in baya's voice."""
     import torch
 
     path = model_file(models)
@@ -143,13 +154,16 @@ def load_silero(models: Path):
         warnings.filterwarnings("ignore", message="TypedStorage is deprecated")
         model = torch.package.PackageImporter(str(path)).load_pickle("tts_models", "model")
 
-    def say(text: str, speaker: str) -> np.ndarray:
+    def say(text: str) -> np.ndarray:
         audio = model.apply_tts(
-            text=text, speaker=speaker, sample_rate=RATE, put_accent=True, put_yo=True
+            text=text, speaker=SPEAKER, sample_rate=RATE, put_accent=True, put_yo=True
         )
         return (audio.clamp(-1, 1) * 32767).to(torch.int16).numpy()
 
     return say
+
+
+ONE_SOUND = threading.Lock()  # every mouth of this process: the settings page's sample too
 
 
 class Speakers:
@@ -158,8 +172,9 @@ class Speakers:
     def play(self, samples: np.ndarray, rate: int) -> None:
         import sounddevice as sd
 
-        sd.play(samples, rate)
-        sd.wait()  # until the end, or until `stop`
+        with ONE_SOUND:  # another mouth's sound ends first: they never sound together
+            sd.play(samples, rate, latency="high")  # a busy moment of the CPU is not heard
+            sd.wait()  # until the end, or until `stop`
 
     def stop(self) -> None:
         import sounddevice as sd
@@ -178,8 +193,7 @@ def tone(up: bool) -> np.ndarray:
 
 
 class Mouth:
-    def __init__(self, speaker: str, models: Path, load=None, out=None):
-        self.speaker = speaker
+    def __init__(self, models: Path, load=None, out=None):
         self.models = models
         self._load = load or load_silero
         self.out = out or Speakers()
@@ -191,11 +205,27 @@ class Mouth:
         self._lock = threading.Lock()
         self.saying = ""
         self.quiet_since = time.monotonic()
+        self._playing = None  # (samples, rate, when it began) of the sound playing now
         threading.Thread(target=self._work, name="mouth", daemon=True).start()
 
     @property
     def speaking(self) -> bool:
-        return self._busy > 0
+        """This mouth reads, or another of this process sounds (the settings page's
+        sample): either way the microphone hears Prophet, not the owner."""
+        return self._busy > 0 or ONE_SOUND.locked()
+
+    @property
+    def level(self) -> float:
+        playing = self._playing
+        if playing is None:
+            return 0.0
+        samples, rate, began = playing
+        at = int((time.monotonic() - began) * rate)
+        window = samples[max(0, at - LEVEL_WINDOW // 2) : at + LEVEL_WINDOW // 2]
+        if not len(window):
+            return 0.0
+        rms = float(np.sqrt(np.mean((window.astype(np.float32) / 32768) ** 2)))
+        return min(1.0, rms * 5)
 
     def warm(self) -> None:
         """Load the model now, so the first answer does not wait for it."""
@@ -205,6 +235,12 @@ class Mouth:
         with self._lock:
             self._busy += 1
             self._queue.put((self._gen, "text", text))
+
+    def cue(self, text: str, volume: float) -> None:
+        """A short phrase in the same voice, quieter."""
+        with self._lock:
+            self._busy += 1
+            self._queue.put((self._gen, "cue", (text, volume)))
 
     def tone(self, up: bool) -> None:
         with self._lock:
@@ -234,7 +270,9 @@ class Mouth:
             try:
                 if gen == self._gen:
                     if kind == "tone":
-                        self.out.play(tone(what), RATE)
+                        self._play(tone(what))
+                    elif kind == "cue":
+                        self._cue(*what)
                     else:
                         self._read(gen, what)
             except Exception:
@@ -247,14 +285,41 @@ class Mouth:
                         self.quiet_since = time.monotonic()
 
     def _read(self, gen: int, text: str) -> None:
+        """Piece by piece; the next one is made while this one sounds, so no
+        silence of Silero's work comes between them."""
         say = self._ready()
-        for i, piece in enumerate(pieces(prepare(text))):
-            samples = say(piece, self.speaker)
-            if gen != self._gen:
-                return
-            if i:
-                samples = np.concatenate([np.zeros(int(RATE * PAUSE), np.int16), samples])
-            self.saying = piece
+        parts = pieces(prepare(text))
+        if not parts:
+            return
+        pool = ThreadPoolExecutor(1, thread_name_prefix="silero")
+        try:
+            coming = pool.submit(say, parts[0])
+            for i, piece in enumerate(parts):
+                samples = coming.result()
+                if i + 1 < len(parts):
+                    coming = pool.submit(say, parts[i + 1])
+                if gen != self._gen:
+                    return
+                if i:
+                    samples = np.concatenate([np.zeros(int(RATE * PAUSE), np.int16), samples])
+                self.saying = piece
+                self._play(samples)
+                if gen != self._gen:
+                    return
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
+
+    def _cue(self, text: str, volume: float) -> None:
+        said = prepare(text)
+        if not said:
+            return
+        samples = self._ready()(said)
+        self.saying = said
+        self._play((samples.astype(np.float32) * volume).astype(np.int16))
+
+    def _play(self, samples: np.ndarray) -> None:
+        self._playing = (samples, RATE, time.monotonic())
+        try:
             self.out.play(samples, RATE)
-            if gen != self._gen:
-                return
+        finally:
+            self._playing = None

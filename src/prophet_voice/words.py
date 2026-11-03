@@ -37,8 +37,14 @@ KINDS = {
         "vosk",
         "Stop Prophet speaking; what follows at once is the next question.",
     ),
-    "hello": Kind("Greeting", ("Привет!",), "said", "Said when the voice starts."),
-    "ack": Kind("Question taken", ("Понял.",), "said", "Said when a question is sent."),
+    "hello": Kind("Greeting", ("Привет!",), "said", "Said when the voice or a dialog starts."),
+    "ack": Kind(
+        "Question taken", ("Понял.",), "said", "Said when a question is sent (not in Private)."
+    ),
+    "begun": Kind(
+        "Listening", ("Ага?",), "said", "Private: here and listening, said softly as you begin."
+    ),
+    "heard": Kind("Heard", ("Окей…",), "said", "Private: the question has ended."),
 }
 MAX_VARIANTS = 10
 FORMS = {
@@ -106,6 +112,40 @@ def after_wake(text: str, wake: list[str]) -> str | None:
         re.I | re.S,
     )
     return found[1].strip() if found else None
+
+
+def _leading(text: str, variants: list[str]) -> str:
+    """The text after one of these variants at its start, or the text as it is."""
+    found = re.match(
+        rf"^[{EDGE}]*(?:{_variants(variants)})(?![а-яё])[:;{EDGE}]*(.*)$", text, re.I | re.S
+    )
+    return found[1] if found else text
+
+
+def _letters(variants: list[str]) -> list[str]:
+    """The words of phrases Prophet says, without their punctuation: «Ага?» is «ага»."""
+    return [w for v in variants if (w := " ".join(re.findall(r"[а-яёa-z]+", v.lower())))]
+
+
+def alone(text: str, kinds: dict[str, list[str]]) -> str:
+    """A Private phrase, with no wake word: without a stop word at its start,
+    Prophet's own «Ага» (the microphone hears it) and a wake word said anyway."""
+    rest = _leading(_leading(text.strip(), kinds["stop"]), _letters(kinds["begun"]))
+    after = after_wake(rest, kinds["wake"])
+    return (after if after is not None else rest).strip()
+
+
+MADE_UP = ("ок", "пока")  # what Whisper makes of a near-silent phrase
+
+
+def cue_only(said: str, kinds: dict[str, list[str]]) -> bool:
+    """A Private phrase of nothing but Prophet's cues (or Whisper's made-up
+    words) is not a question: the microphone heard Prophet."""
+    cues = {
+        w.replace("ё", "е") for v in _letters([*kinds["begun"], *kinds["heard"]]) for w in v.split()
+    }
+    heard = {w.replace("ё", "е") for w in re.findall(r"[а-яёa-z]+", said.lower())}
+    return bool(heard) and heard <= cues | set(MADE_UP)
 
 
 def cancelled(said: str, cancel: list[str]) -> bool:
