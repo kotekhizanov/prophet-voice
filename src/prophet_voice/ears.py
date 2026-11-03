@@ -109,7 +109,12 @@ class Ears:
         self.level = 0.0
         self.wake = recognizer([*words["wake"], "[unk]"])
         self.wake_from = 0.0  # the clock when `wake` began: its word times count from it
-        self.missed = False  # `wake` was given nothing while Prophet spoke
+        self.renew = False  # a new `wake` at the next block: Prophet spoke, or the words changed
+
+    def configure(self, words: dict, threshold: float) -> None:
+        """New words and a new threshold (from another thread)."""
+        self.renew = self.renew or words["wake"] != self.words["wake"]
+        self.words, self.threshold = words, threshold
 
     def listen_free(self, seconds: float) -> None:
         """Hear the next phrase without the wake word (from another thread)."""
@@ -135,11 +140,11 @@ class Ears:
         seconds, at = len(block) / 2 / RATE, self.clock
         self.clock += seconds
         if not self.listening:
-            self.was_speaking, self.missed, self.level = True, True, 0.0
+            self.was_speaking, self.renew, self.level = True, True, 0.0
             return
-        if self.missed:  # Vosk's times would skip the blocks it was not given
+        if self.renew:  # Vosk's times would skip the blocks it was not given
             self.wake = self.recognizer([*self.words["wake"], "[unk]"])
-            self.wake_from, self.missed = at, False
+            self.wake_from, self.renew = at, False
         voice = self._voice(np.frombuffer(block, np.int16).astype(np.float32) / 32768)
         speaking = self.mouth.speaking
         if self.was_speaking and not speaking:  # what was heard meanwhile was Prophet's own
@@ -334,11 +339,12 @@ def microphones() -> list[str]:
     return [d["name"] for d in sd.query_devices() if d["max_input_channels"] > 0]
 
 
-def listen(ears: Ears, device: str, on, stop, failed=None) -> None:
+def listen(ears: Ears, device, on, stop, failed=None) -> None:
     """The microphone's blocks, with the room's noise taken out, to the ears while
     `on` is set, until `stop` is (threading.Events). While `on` is not, the
     microphone is closed and nothing is heard; `failed(exc)` when it would not
-    open (no microphone, or no permission), and `on` is cleared."""
+    open (no microphone, or no permission), and `on` is cleared. `device()` is
+    the microphone's name each time it opens (empty: the system's)."""
     import sounddevice as sd
 
     blocks: queue.Queue = queue.Queue()
@@ -360,7 +366,7 @@ def listen(ears: Ears, device: str, on, stop, failed=None) -> None:
                 blocksize=BLOCK,
                 channels=1,
                 dtype="int16",
-                device=device or None,
+                device=device() or None,
                 callback=got,
             )
             stream.start()

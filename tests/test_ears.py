@@ -168,6 +168,17 @@ def test_while_prophet_speaks_the_ears_do_not_listen():
     assert len(e.recognizers.made) == 2
 
 
+def test_new_wake_words_make_a_new_recognizer():
+    e = Ears_({})
+    e.feed(quiet(), 5)
+    e.ears.configure({**defaults(), "wake": ["оракул"]}, 0.9)
+    e.feed(quiet(), 5)
+    assert len(e.recognizers.made) == 2 and e.ears.threshold == 0.9
+    e.ears.configure({**defaults(), "wake": ["оракул"]}, 0.8)  # the same words: the same one
+    e.feed(quiet(), 5)
+    assert len(e.recognizers.made) == 2
+
+
 def test_a_phrase_begun_goes_on_while_prophet_speaks():
     # The tone after the wake word sounds while the owner goes on speaking.
     e = Ears_({"wake": {35: [word("пророк", 1.1, 1.4)]}})
@@ -323,7 +334,9 @@ def run_listen(mic, monkeypatch, until, on_from_start=True, failed=None):
     heard, on, stop = Heard(), threading.Event(), threading.Event()
     if on_from_start:
         on.set()
-    t = threading.Thread(target=ears_.listen, args=(heard, "", on, stop), kwargs={"failed": failed})
+    t = threading.Thread(
+        target=ears_.listen, args=(heard, lambda: "", on, stop), kwargs={"failed": failed}
+    )
     t.start()
     end = time.monotonic() + 3
     while not until(heard, on) and time.monotonic() < end:

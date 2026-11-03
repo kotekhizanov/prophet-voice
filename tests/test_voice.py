@@ -81,6 +81,10 @@ class Ears:
         self.alone = False
         self.state = "waiting"
         self.tentative = False
+        self.threshold = None
+
+    def configure(self, words, threshold):
+        self.words, self.threshold = words, threshold
 
     def listen_free(self, seconds):
         self.free.append(seconds)
@@ -545,18 +549,21 @@ def test_only_one_voice_runs_on_this_machine():
 
 
 def test_a_dialog_begins_with_what_the_owner_set_since_the_start(home):
-    config.save({"stt": "groq", "groq_key": "gsk_test"})  # the settings page, meanwhile
-    v = make(Core(plugin={"whisper_model": "medium"}))  # and Omniscient
+    v = make(Core(plugin={"whisper_model": "medium", "threshold": 0.9}))
+    # This Mac's settings, set in Omniscient meanwhile.
+    config.save({"groq_key": "gsk_test", "microphone": "USB", "words": {"hello": ["Слушаю."]}})
 
     async def go():
         v.loop = asyncio.get_running_loop()
         v.set_dialog("private")
+        assert v.device == "USB"  # before the microphone opens
         await v.beginning
 
     asyncio.run(go())
-    assert v.hearing.settings["stt"] == "groq" and v.hearing.settings["groq_key"] == "gsk_test"
-    assert v.hearing.settings["whisper_model"] == "medium"
-    assert v.mouth.said == ["Привет!"]  # greeted in the hearing set now
+    assert v.hearing.settings["groq_key"] == "gsk_test"
+    assert v.hearing.settings["whisper_model"] == "medium"  # the core's
+    assert v.ears.threshold == 0.9 and v.ears.words["hello"] == ["Слушаю."]
+    assert v.mouth.said == ["Слушаю."]  # greeted with the words set now
 
 
 def test_a_dialog_ended_before_its_settings_are_read_is_not_greeted():

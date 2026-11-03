@@ -64,6 +64,8 @@ class Voice:
     def __init__(self, settings: dict, core: Core, mouth: Mouth, hearing: Hearing):
         self.words = settings["words"]
         self.project = settings["project"]
+        self.device = settings["microphone"]  # the microphone's name; empty: the system's
+        self.from_omniscient: dict = {}  # the settings Omniscient gave, as last read
         self.core, self.mouth, self.hearing = core, mouth, hearing
         self.ears = None
         self.loop: asyncio.AbstractEventLoop | None = None
@@ -106,9 +108,12 @@ class Voice:
             self.ears.be_alone(self.private)
         if (was == "private" and not self.private) or (was and not dialog):
             self.quiet()
+        begins = dialog and not was
+        if begins:  # what the owner has set since, in Omniscient, from now on
+            self.configure(config.with_plugin(config.load(), self.from_omniscient)[0])
         if self.private:
             self.microphone.set()
-        if dialog and not was:
+        if begins:
             if self.loop is not None and self.loop.is_running():
                 self.beginning = self.loop.create_task(self._begin())
             else:  # not serving yet: the settings it began with
@@ -121,18 +126,30 @@ class Voice:
             self.mouth.say(words.pick(self.words["hello"]))
 
     async def refresh(self) -> None:
-        """What the owner has set since the voice started, in Omniscient and on the
-        settings page: how speech becomes text."""
-        settings = config.load()
+        """The core's settings, if the owner has changed them in Omniscient since
+        they were last read (this Mac's are taken as a dialog begins)."""
         try:
             plugin = await self.core.plugin()
         except CoreError as exc:
             log.warning("the settings from Omniscient are not read: %s", exc)
-            plugin = None
-        if plugin is not None:
-            settings, _, refused = config.with_plugin(settings, plugin["settings"])
-            for why in refused:
-                log.warning("a setting from Omniscient is not used: %s", why)
+            return
+        if plugin is None or plugin["settings"] == self.from_omniscient:
+            return
+        self.from_omniscient = plugin["settings"]
+        settings, _, refused = config.with_plugin(config.load(), self.from_omniscient)
+        for why in refused:
+            log.warning("a setting from Omniscient is not used: %s", why)
+        self.configure(settings)
+
+    def configure(self, settings: dict) -> None:
+        """What the owner has set since the voice started, in Omniscient: from now on."""
+        self.words, self.project, self.device = (
+            settings["words"],
+            settings["project"],
+            settings["microphone"],
+        )
+        if self.ears is not None:
+            self.ears.configure(settings["words"], settings["threshold"])
         self.hearing.configure(settings)
 
     def quiet(self) -> None:
@@ -415,6 +432,7 @@ async def _run(settings: dict, models) -> None:
     await asyncio.gather(asyncio.to_thread(mouth.warm), asyncio.to_thread(hearing.warm))
 
     voice = Voice(settings, core, mouth, hearing)
+    voice.from_omniscient = plugin["settings"] if plugin is not None else {}
     voice.ears = ears_.Ears(
         settings["words"],
         settings["threshold"],
@@ -430,7 +448,7 @@ async def _run(settings: dict, models) -> None:
     await asyncio.sleep(0)  # serve() has its loop before the ears hear anything
     threading.Thread(
         target=ears_.listen,
-        args=(voice.ears, settings["microphone"], voice.microphone, stop),
+        args=(voice.ears, lambda: voice.device, voice.microphone, stop),
         kwargs={"failed": voice.on_microphone_failed},
         name="ears",
         daemon=True,
