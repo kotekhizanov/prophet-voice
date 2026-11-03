@@ -41,6 +41,11 @@ MODEL_URL = "https://models.silero.ai/models/tts/ru/{}.pt"
 RATE = 24000  # Hz: clear speech at half the bytes of 48 kHz
 PIECE = 300  # characters Silero reads at once; longer sentences are cut at a comma
 PAUSE = 0.25  # seconds of silence between pieces
+# Samples the speakers take at once. Left to PortAudio, at a rate not the
+# device's own it asks for a dozen at a time, a thousand times a second, and
+# each time waits for Python's lock: with the ears' thread busy, a tenth of the
+# sound came out, and the voice crackled.
+BLOCK = 1024
 LEVEL_WINDOW = 1024  # samples around the one playing now that make `level`
 
 # The English names of letters, for abbreviations ("SQL": эс-кью-эл).
@@ -173,7 +178,8 @@ class Speakers:
         import sounddevice as sd
 
         with ONE_SOUND:  # another mouth's sound ends first: they never sound together
-            sd.play(samples, rate, latency="high")  # a busy moment of the CPU is not heard
+            # a busy moment of the CPU is not heard
+            sd.play(samples, rate, blocksize=BLOCK, latency="high")
             sd.wait()  # until the end, or until `stop`
 
     def stop(self) -> None:
