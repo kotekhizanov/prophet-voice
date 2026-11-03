@@ -8,7 +8,8 @@
 // (`prophet-voice run` on the Mac): its microphone is open only while the dialog is. This
 // script tells it when the dialog begins and ends and follows how it is, at the plugin's
 // address (dialog.py). A dialog lives while the browser page that began it is open; the
-// button again or Esc on the dialog's page ends it at once.
+// button again or Esc on the dialog's page ends it at once. Beside the cloud, the voices
+// heard in a Private dialog: the owner names one, and the voice knows it from then on.
 const STYLE = `
 .pv-view{display:flex;flex-direction:column;gap:1rem}
 .pv-stage{position:relative;height:55vh;min-height:18rem;overflow:hidden;border-radius:1rem}
@@ -19,6 +20,9 @@ const STYLE = `
 @keyframes pv-turn{to{transform:rotate(360deg)}}
 .pv-said{display:flex;flex-direction:column;gap:.75rem;max-height:55vh;overflow-y:auto}
 .pv-said p{white-space:pre-wrap;font-size:.875rem;line-height:1.4rem}
+.pv-voices{display:flex;flex-direction:column;gap:.5rem}
+.pv-voice{display:flex;align-items:center;gap:.5rem}
+.pv-voice .input{flex:1 1 0%;min-width:0;margin:0}
 .pv-pressed[aria-pressed="true"]{color:#059669}
 .dark .pv-pressed[aria-pressed="true"]{color:#34d399}
 @media (min-width:1024px){.pv-view{flex-direction:row}.pv-stage{flex:1 1 0%;height:70vh}.pv-side{flex:none;width:22rem}.pv-said{max-height:62vh}}`;
@@ -69,12 +73,12 @@ function drawSettings(prophet, body, values, saved) {
     el("div", {}, el("h3", { class: "section-title" }, title), about ? hint(about) : null), ...kids);
 
   // The core's settings go into these places; this Mac's are drawn once the voice answers.
-  const slots = { project: el("div"), threshold: el("div"), stt: el("div"), whisper_model: el("div") };
+  const slots = { project: el("div"), threshold: el("div"), stt: el("div"), whisper_model: el("div"), speakers: el("div") };
   const known = el("p", { class: "text-sm", "aria-live": "polite" }, "Asking the voice…");
   const check = el("button", { type: "button", class: "btn btn-sm" }, "Check");
   const listen = el("button", { type: "button", class: "btn btn-sm" }, "Listen");
   const listened = status();
-  const microphone = el("div"), groq = el("div"), words = el("div", { class: "space-y-4" });
+  const microphone = el("div"), groq = el("div"), words = el("div", { class: "space-y-4" }), remembered = el("div", { class: "space-y-2" });
   const error = el("span", { class: "mr-auto text-sm text-red-600 dark:text-red-400", "aria-live": "polite" });
   const state = el("span", { class: "hint", "aria-live": "polite" });
   const save = el("button", { type: "submit", class: "btn btn-primary" }, "Save");
@@ -88,11 +92,13 @@ function drawSettings(prophet, body, values, saved) {
       listened, microphone, slots.threshold),
     section("Speech to text", "Only the phrase you say to Prophet goes to Whisper, and to Groq only when you choose it.",
       slots.stt, slots.whisper_model, groq),
+    section("Voices", "In a Private dialog, when more than one person speaks, each line Prophet gets says whose it is. Name a voice on the dialog's page while it is heard; the names and the voices' prints stay on the Mac.",
+      slots.speakers, remembered),
     section("Words", "One variant per line. The wake word is heard by Vosk before anything leaves the Mac, so each is one Russian word that Vosk's small model knows.", words),
     el("div", { class: `flex items-center gap-3 px-5 py-3 ${line}` }, error, state, save));
   body.append(el("section", { class: "panel" }, form));
 
-  let me = null, specs = {}, mac = null, options = null;
+  let me = null, specs = {}, mac = null, options = null, voices = [];
   const id = (key) => `voice-setting-${key}`;
   const input = (key) => document.getElementById(id(key));
   function labelled(key, title, about, field) {
@@ -156,13 +162,24 @@ function drawSettings(prophet, body, values, saved) {
       return labelled(`w-${kind.name}`, kind.label, kind.hint, area);
     }));
   }
+  function fillVoices() {
+    remembered.replaceChildren(...(voices.length ? voices.map((name) => {
+      const forget = el("button", { type: "button", class: "btn btn-sm" }, "Forget");
+      forget.onclick = async () => {
+        forget.disabled = true;
+        try { ({ voices } = await voice("/api/voices", { forget: name })); fillVoices(); }
+        catch (err) { error.textContent = err.message; forget.disabled = false; }
+      };
+      return el("div", { class: "flex items-center gap-3" }, el("span", { class: "mr-auto text-sm" }, name), forget);
+    }) : [el("p", { class: "hint" }, "No voice is remembered yet.")]));
+  }
   function readMac() {
     return { microphone: input("microphone").value, groq_key: input("groq_key").value,
       words: Object.fromEntries(options.words.map((k) => [k.name, input(`w-${k.name}`).value.split("\n")])) };
   }
   function away(err) {
     const why = `The voice does not answer on this Mac (${err.message}): the microphone, the Groq key and the words are set while it runs.`;
-    for (const slot of [microphone, groq, words]) slot.replaceChildren();
+    for (const slot of [microphone, groq, words, remembered]) slot.replaceChildren();
     words.append(el("p", { class: "text-sm text-red-600 dark:text-red-400" }, why));
     known.textContent = "The voice is not running on this Mac.";
   }
@@ -190,8 +207,8 @@ function drawSettings(prophet, body, values, saved) {
       fill();
     } catch (err) { error.textContent = `The settings are not read: ${err.message}`; }
     try {
-      ({ values: mac, options } = await voice("/api/settings"));
-      fillMac(); checkKey();
+      ({ values: mac, options, voices = [] } = await voice("/api/settings"));
+      fillMac(); fillVoices(); checkKey();
     } catch (err) { mac = null; away(err); }
     save.disabled = !me && !mac;
   }
@@ -231,10 +248,12 @@ function dialogPage(prophet) {
   const pageButton = make("button", "btn btn-primary", { type: "button" }, "Private");
   const problem = make("p", "text-sm text-red-600 dark:text-red-400", { "aria-live": "polite" });
   const said = make("div", "pv-said");
+  const voicesBox = make("div", "pv-voices"), voicesPart = make("div", "border-t border-zinc-200 px-5 py-3 dark:border-zinc-800", { hidden: "" },
+    make("p", "hint mb-2", {}, "Voices in this dialog: name one and Prophet knows who says what."), voicesBox);
   const side = make("section", "panel pv-side",
     {}, make("div", "flex items-center gap-3 px-5 py-4", {},
       make("div", "mr-auto", {}, make("h3", "section-title", {}, "The dialog"), make("p", "hint mt-1", {}, "What is said in the chat meanwhile."))),
-    make("div", "border-t border-zinc-200 px-5 py-3 dark:border-zinc-800", {}, problem, said));
+    voicesPart, make("div", "border-t border-zinc-200 px-5 py-3 dark:border-zinc-800", {}, problem, said));
   side.firstChild.append(pageButton);
   const view = make("div", "pv-view", {}, stage, side);
   const shown = prophet.ui.page({ id: "dialog", title: "Voice", icon: "wave", render(body) { body.append(view); startOrb(); } });
@@ -303,12 +322,39 @@ function dialogPage(prophet) {
     const source = new EventSource(`${voiceAt}/dialog/events?page=${page}`);
     source.onmessage = (e) => heard(JSON.parse(e.data));
     source.onerror = () => {
-      live = null; end(false); setButtons();
+      live = null; end(false); setButtons(); drawVoices([]);
       if (source.readyState === EventSource.CLOSED) setTimeout(follow, 5000);  // else it tries again by itself
     };
   }
+  // The voices heard, drawn again only when they change, and not while a name is typed.
+  let voicesShown = "";
+  function drawVoices(list) {
+    const now = JSON.stringify(list || []);
+    if (now === voicesShown || voicesBox.contains(document.activeElement)) return;
+    voicesShown = now;
+    voicesPart.hidden = !(list && list.length);
+    voicesBox.replaceChildren(...(list || []).map((v) => {
+      const name = make("input", "input", { type: "text", maxlength: "40", autocomplete: "off", placeholder: v.named ? v.label : "Who is it?", "aria-label": `Name of ${v.label}` });
+      if (v.named) name.value = v.label;
+      const keep = make("button", "btn btn-sm", { type: "button" }, v.named ? "Rename" : "Name");
+      const tag = make("span", "hint", {}, v.named ? "" : v.label);
+      keep.onclick = async () => {
+        keep.disabled = true;
+        try {
+          const r = await fetch(`${voiceAt}/dialog/voice`, { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: v.id, name: name.value.trim() }) });
+          if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+          problem.textContent = ""; name.blur(); voicesShown = "";
+        } catch (err) { problem.textContent = `Voice: ${err.message}`; }
+        finally { keep.disabled = false; }
+      };
+      name.onkeydown = (e) => { if (e.key === "Enter") keep.click(); };
+      return make("div", "pv-voice", {}, ...(v.named ? [] : [tag]), name, keep);
+    }));
+  }
   function heard(snapshot) {
     live = snapshot;
+    drawVoices(live.voices);
     orb.mic = Math.max(orb.mic, live.mic || 0);
     if (performance.now() - asked > SETTLE * 1000) {
       if (live.dialog && (!dialog || dialog.private !== (live.dialog === "private"))) {

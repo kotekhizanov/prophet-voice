@@ -14,7 +14,9 @@ page there. The manifest's `settings` are the core's (config.PLUGIN_SETTINGS);
 this Mac's own (MAC: the microphone, the Groq key, the words) the voice keeps
 in settings.json, and the page reads and sets them here (`/api/settings`),
 tries the voice (`/api/say`) and asks whether the core knows the key
-(`/api/check`). A key is never sent back: only whether one is set and its
+(`/api/check`). The voices remembered by name (speakers.py) are listed with
+the settings and forgotten with `/api/voices`; the dialog's page names one
+heard in it (`/dialog/voice`). A key is never sent back: only whether one is set and its
 last four characters, and an empty field keeps it. The core's address, the
 client key and the port are not set from a page: another core could be given
 the key.
@@ -35,7 +37,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import httpx
 
-from prophet_voice import config, dialog, install, mouth, words
+from prophet_voice import config, dialog, install, mouth, speakers, words
 
 log = logging.getLogger("prophet_voice.settings")
 SAMPLE = "Здравствуйте! Я Пророк, так я буду читать ответы."
@@ -60,7 +62,9 @@ PLUGIN = (
     "/dialog",
     "/dialog/end",
     "/dialog/events",
+    "/dialog/voice",
     "/api/settings",
+    "/api/voices",
     "/api/check",
     "/api/say",
 )
@@ -99,6 +103,12 @@ def options() -> dict:
             for n, k in words.KINDS.items()
         ],
     }
+
+
+def voices() -> speakers.Voices:
+    """The running voice's voices, or those remembered when it is not running."""
+    running = Page.dialog.voice.speakers if Page.dialog is not None else None
+    return running.voices if running is not None else speakers.Voices()
 
 
 def check_core(settings: dict, get=httpx.get) -> dict:
@@ -192,7 +202,14 @@ class Page(BaseHTTPRequestHandler):
             page = parse_qs(urlsplit(self.path).query).get("page", [None])[0]
             return self._events(page if page and PAGE.match(page) else None)
         if self.path == "/api/settings":
-            return self._json(200, {"values": config.shown(config.load()), "options": options()})
+            return self._json(
+                200,
+                {
+                    "values": config.shown(config.load()),
+                    "options": options(),
+                    "voices": voices().names(),
+                },
+            )
         self._json(404, {"error": "no such page"})
 
     def do_POST(self):
@@ -204,7 +221,9 @@ class Page(BaseHTTPRequestHandler):
             return self._set_dialog()
         if self.path == "/dialog/end":
             return self._end_dialog()
-        if self.path not in ("/api/settings", "/api/check", "/api/say"):
+        if self.path == "/dialog/voice":
+            return self._name_voice()
+        if self.path not in ("/api/settings", "/api/check", "/api/say", "/api/voices"):
             return self._json(404, {"error": "no such page"})
         if self._omniscient("the settings") is None:
             return
@@ -215,7 +234,18 @@ class Page(BaseHTTPRequestHandler):
             return self._set(body if isinstance(body, dict) else {})
         if self.path == "/api/check":
             return self._json(200, check_core(config.load()))
+        if self.path == "/api/voices":
+            return self._forget(body if isinstance(body, dict) else {})
         self._say()
+
+    def _forget(self, body: dict) -> None:
+        """{"forget": a remembered voice's name}."""
+        name = body.get("forget")
+        if not isinstance(name, str) or not name:
+            return self._json(422, {"error": "which voice to forget"})
+        found = voices()
+        found.forget(name)
+        self._json(200, {"voices": found.names()})
 
     def _set(self, changes: dict) -> None:
         """This Mac's settings, from Omniscient's page."""
@@ -280,6 +310,25 @@ class Page(BaseHTTPRequestHandler):
             return self._json(422, {"error": "a page names itself in letters, digits and -"})
         Page.dialog.set(kind, project, page)
         self._json(200, {"dialog": kind})
+
+    def _name_voice(self) -> None:
+        """{"id": a voice heard in this dialog, "name": its name, or "" to forget it}."""
+        if self._omniscient("a voice's name") is None:
+            return
+        body = self._body()
+        if body is None:
+            return
+        if Page.dialog is None:
+            return self._json(409, {"error": NOT_RUNNING})
+        voice_id = body.get("id") if isinstance(body, dict) else None
+        name = body.get("name") if isinstance(body, dict) else None
+        if not isinstance(voice_id, int) or isinstance(voice_id, bool) or not isinstance(name, str):
+            return self._json(422, {"error": "a voice is its id and a name"})
+        try:
+            Page.dialog.name_voice(voice_id, name)
+        except ValueError as exc:
+            return self._json(422, {"error": str(exc)})
+        self._json(200, {"ok": True})
 
     def _end_dialog(self) -> None:
         """A leaving page's beacon (no JSON: a beacon cannot ask first). It only ends."""

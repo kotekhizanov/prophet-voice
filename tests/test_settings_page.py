@@ -197,6 +197,11 @@ class FakeDialog:
         self.set_to.append((kind, project))
         self.page = page
 
+    def name_voice(self, voice_id, name):
+        if voice_id != 1:
+            raise ValueError("no such voice in this dialog")
+        self.named = (voice_id, name)
+
     def watching(self, page=None):
         import contextlib
 
@@ -275,3 +280,31 @@ def test_the_voice_streams_how_it_is(page, voice, monkeypatch):
             break
         threading.Event().wait(0.05)
     assert voice.watched == ["in", "out"]
+
+
+def test_omniscient_names_a_voice_heard_in_the_dialog(page, voice):
+    def name(origin=OMNISCIENT, **body):
+        return page.post("/dialog/voice", json=body, headers={"Origin": origin})
+
+    assert name(id=1, name="Аня").status_code == 200
+    assert voice.named == (1, "Аня")
+    assert name(id=2, name="Аня").json()["error"] == "no such voice in this dialog"
+    assert name(id=True, name="Аня").status_code == 422
+    assert name(id=1).status_code == 422
+    assert name("http://evil.com", id=1, name="Ева").status_code == 403
+    assert voice.named == (1, "Аня")
+
+
+def test_omniscient_lists_and_forgets_the_remembered_voices(page):
+    from prophet_voice.speakers import Voices
+
+    v = Voices()
+    v.who([1.0, 0.0])
+    v.name(1, "Аня")
+    assert page.get("/api/settings", headers=FROM_OMNISCIENT).json()["voices"] == ["Аня"]
+    r = page.post("/api/voices", json={"forget": "Аня"}, headers=FROM_OMNISCIENT)
+    assert r.status_code == 200 and r.json()["voices"] == []
+    assert Voices().names() == []
+    assert page.post("/api/voices", json={}, headers=FROM_OMNISCIENT).status_code == 422
+    elsewhere = {"Origin": "http://evil.com"}
+    assert page.post("/api/voices", json={"forget": "x"}, headers=elsewhere).status_code == 403

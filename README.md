@@ -62,6 +62,7 @@ downloads the models into `~/.config/prophet-voice/models`, each once:
 | Vosk `vosk-model-small-ru-0.22` (checked by SHA-256) | 45 MB | the wake word |
 | Silero `v5_ru` | 140 MB | Prophet's voice |
 | faster-whisper `large-v3-turbo` (or the one in the settings) | 1.6 GB | speech to text |
+| sherpa-onnx: pyannote's segmentation and 3D-Speaker's ERes2Net (checked by SHA-256) | 46 MB | telling voices apart |
 
 Run `prophet-voice install` again after choosing another Whisper model. With
 speech going to Groq, no Whisper model is downloaded (and Groq then has no
@@ -182,6 +183,27 @@ answer that comes after (the answer is still in the chat). A dialog belongs
 to the page that began it: closing or reloading that page ends it, so the
 microphone is never open with no page to show it. The cue words are in the
 settings (Listening, Heard).
+
+### Who said what
+
+When more than one person talks to Prophet in a Private dialog, the voice
+tells them apart (sherpa-onnx, here on the Mac). The voices are numbered as
+they are first heard, and once there are two, each line of the question
+says whose it is:
+
+```
+Голос 1: Какая завтра погода?
+Голос 2: И напомни купить хлеб.
+```
+
+A phrase two people said in turn, with no pause between them, is split by
+Whisper's word times. Beside the cloud, the voices heard in the dialog have
+a field each: name one («Аня») and the voice knows her by name from then on,
+in the next dialogs too. The voices' prints are kept in
+`~/.config/prophet-voice/voices.json` (readable by you only) and forgotten
+on the voice's settings page (Voices). The setting "Tell voices apart"
+switches it off. People speaking at the same moment are not separated: their
+words go to whoever the voice hears more of.
 
 Chrome may ask once whether Omniscient may reach devices on the local
 network: that is the page talking to the voice at `127.0.0.1`. After the
