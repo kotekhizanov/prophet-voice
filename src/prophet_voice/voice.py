@@ -20,6 +20,11 @@ chat open in Omniscient. Ending the dialog ends everything the voice does at
 once: what it says, the phrases being heard, the answers it waits for (the
 core's run goes on, and its answer is in the chat).
 
+In a Private dialog the voices are told apart (speakers.py, the "speakers"
+setting): once more than one has been heard, each line of the question says
+whose it is, «Аня: …», and a phrase two people said is split between them by
+Whisper's word times.
+
 Only one voice runs on this machine: a second `run` refuses to start, or two
 would hear the same phrase and answer it together.
 
@@ -34,6 +39,7 @@ settings, and everything it starts is traced in the core.
 """
 
 import asyncio
+import concurrent.futures
 import contextlib
 import fcntl
 import logging
@@ -42,7 +48,7 @@ import signal
 import sys
 import threading
 
-from prophet_voice import config, settings_page, words
+from prophet_voice import config, settings_page, speakers, words
 from prophet_voice import ears as ears_
 from prophet_voice.core import Core, CoreError
 from prophet_voice.dialog import Dialog
@@ -65,6 +71,8 @@ class Voice:
         self.words = settings["words"]
         self.project = settings["project"]
         self.device = settings["microphone"]  # the microphone's name; empty: the system's
+        self.tell_apart = settings["speakers"]
+        self.speakers: speakers.Speakers | None = None  # None: not installed
         self.from_omniscient: dict = {}  # the settings Omniscient gave, as last read
         self.core, self.mouth, self.hearing = core, mouth, hearing
         self.ears = None
@@ -109,6 +117,8 @@ class Voice:
         if (was == "private" and not self.private) or (was and not dialog):
             self.quiet()
         begins = dialog and not was
+        if begins and self.speakers is not None:
+            self.speakers.voices.new_dialog()
         if begins:  # what the owner has set since, in Omniscient, from now on
             self.configure(config.with_plugin(config.load(), self.from_omniscient)[0])
         if self.private:
@@ -143,10 +153,11 @@ class Voice:
 
     def configure(self, settings: dict) -> None:
         """What the owner has set since the voice started, in Omniscient: from now on."""
-        self.words, self.project, self.device = (
+        self.words, self.project, self.device, self.tell_apart = (
             settings["words"],
             settings["project"],
             settings["microphone"],
+            settings["speakers"],
         )
         if self.ears is not None:
             self.ears.configure(settings["words"], settings["threshold"])
@@ -213,13 +224,18 @@ class Voice:
             self.hearing_now -= 1
 
     async def _handle(self, audio: bytes, free: bool, era: int) -> None:
-        text = await asyncio.to_thread(self.hearing.transcribe, audio)
+        apart = self.private and self.tell_apart and self.speakers is not None
+        if apart:
+            turns = await asyncio.to_thread(self._turns, audio)
+            text = "\n".join(t for _, t in turns)
+        else:
+            text = await asyncio.to_thread(self.hearing.transcribe, audio)
+            turns = [(None, text)]
         if era != self.era:  # the dialog ended while Whisper heard it
             return
+        plain = None  # the words alone, without whose they are
         if self.private:
-            said = words.alone(text, self.words)
-            if words.cue_only(said, self.words):
-                said = ""  # the microphone heard Prophet's own cue
+            said, plain = self._alone(turns, apart and self.speakers.voices.many())
         elif free:
             said = text.strip()
         else:
@@ -229,7 +245,7 @@ class Voice:
             if not free:
                 self.mouth.tone(False)
             return
-        if words.cancelled(said, self.words["cancel"]):
+        if words.cancelled(plain or said, self.words["cancel"]):
             if self.run_id is not None:
                 try:
                     await self.core.cancel(self.run_id)
@@ -248,6 +264,34 @@ class Voice:
         if not self.private:
             self.mouth.say(words.pick(self.words["ack"]))
         self.follow(run_id)
+
+    def _turns(self, audio: bytes) -> list[tuple[dict | None, str]]:
+        """Who said what in a Private phrase (in a worker thread): [(voice, text)].
+        Whisper hears it while the voices are told apart, not after."""
+        with concurrent.futures.ThreadPoolExecutor(1) as pool:
+            heard = pool.submit(self.hearing.transcribe, audio, True)
+            try:
+                parts = self.speakers.parts(audio)
+            except Exception:
+                log.exception("could not tell the voices apart")
+                parts = []
+            text, timed = heard.result()
+        if len({v["id"] for _, _, v in parts}) <= 1:
+            return [(parts[0][2] if parts else None, text)]
+        return speakers.turns(parts, timed)
+
+    def _alone(self, turns, labelled: bool) -> tuple[str, str]:
+        """A Private phrase as it goes to the chat, each line with whose it is when
+        `labelled`, and its words alone. Without Prophet's own cues."""
+        kept = []
+        for voice, text in turns:
+            text = words.alone(text, self.words)
+            if text and not words.cue_only(text, self.words):  # else it heard Prophet's cue
+                kept.append((voice, text))
+        plain = " ".join(t for _, t in kept)
+        if not labelled:
+            return plain, plain
+        return "\n".join(f"{speakers.label(v)}: {t}" for v, t in kept), plain
 
     def follow(self, run_id: int) -> None:
         self.run_id = run_id
@@ -432,6 +476,11 @@ async def _run(settings: dict, models) -> None:
     await asyncio.gather(asyncio.to_thread(mouth.warm), asyncio.to_thread(hearing.warm))
 
     voice = Voice(settings, core, mouth, hearing)
+    try:
+        diarize, embed = await asyncio.to_thread(speakers.load_sherpa, models)
+        voice.speakers = speakers.Speakers(diarize, embed)
+    except Exception as exc:  # not installed: one voice, as before
+        print(f"Voices are not told apart: {exc}")
     voice.from_omniscient = plugin["settings"] if plugin is not None else {}
     voice.ears = ears_.Ears(
         settings["words"],

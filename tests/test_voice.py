@@ -71,8 +71,12 @@ class Hearing:
     def configure(self, settings):
         self.settings = settings
 
-    def transcribe(self, audio):
-        return self.texts.pop(0)
+    def transcribe(self, audio, timed=False):
+        """A text, or a phrase's words as (start, end, word): with `timed`, both."""
+        said = self.texts.pop(0)
+        if isinstance(said, str):
+            return (said, [(0.0, 1.0, said)]) if timed else said
+        return (" ".join(w for _, _, w in said).strip(), said) if timed else said
 
 
 class Ears:
@@ -577,3 +581,73 @@ def test_a_dialog_ended_before_its_settings_are_read_is_not_greeted():
 
     asyncio.run(go())
     assert "Привет!" not in v.mouth.said
+
+
+class Speakers:
+    """Who speaks, as speakers.Speakers says: the parts of each phrase, in turn."""
+
+    def __init__(self, *phrases):
+        from prophet_voice.speakers import Voices
+
+        self.voices = Voices(config.home() / "voices.json")
+        self.phrases = list(phrases)
+
+    def parts(self, audio):
+        return [(a, b, self.voices.who(p)) for a, b, p in self.phrases.pop(0)]
+
+
+def private_with_voices(core, speakers, *texts):
+    v = make(core, *texts)
+    v.speakers = speakers
+    v.set_dialog("private")
+    return v
+
+
+ANYA, KOSTYA = [1.0, 0.0], [0.0, 1.0]
+
+
+def test_private_with_one_voice_says_nothing_of_whose_it_is():
+    core = Core([("run", {"run_id": 5, "status": "done"})])
+    v = private_with_voices(core, Speakers([(0.0, 2.0, ANYA)]), "Какая погода?")
+    asyncio.run(v.handle(b"", True))
+    assert core.calls == [("chat", "Какая погода?", None)]
+
+
+def test_private_with_two_voices_says_who_said_what():
+    core = Core([("run", {"run_id": 5, "status": "done"})])
+    timed = [
+        (0.1, 0.5, " Какая"),
+        (0.6, 0.9, " погода?"),
+        (1.3, 1.8, " Купи"),
+        (1.9, 2.2, " хлеб."),
+    ]
+    phrases = [(0.0, 1.0, ANYA), (1.2, 2.4, KOSTYA)], [(0.0, 1.0, ANYA)]
+    v = private_with_voices(core, Speakers(*phrases), timed, "Ага? И отмена будильника.")
+
+    async def go():
+        await v.handle(b"", True)
+        v.speakers.voices.name(1, "Аня")
+        await v.handle(b"", True)  # one voice now, but the dialog has heard two
+
+    asyncio.run(go())
+    assert core.calls == [
+        ("chat", "Голос 1: Какая погода?\nГолос 2: Купи хлеб.", None),
+        ("chat", "Аня: И отмена будильника.", None),
+    ]
+    assert [s["label"] for s in v.speakers.voices.shown()] == ["Аня", "Голос 2"]
+
+
+def test_voices_are_not_told_apart_when_switched_off():
+    core = Core([("run", {"run_id": 5, "status": "done"})])
+    v = private_with_voices(core, Speakers(), "Какая погода?")
+    v.tell_apart = False
+    asyncio.run(v.handle(b"", True))  # Speakers() has no phrase: it is not asked
+    assert core.calls == [("chat", "Какая погода?", None)]
+
+
+def test_a_new_dialog_hears_its_voices_anew():
+    v = private_with_voices(Core(), Speakers())
+    v.speakers.voices.who(ANYA)
+    v.set_dialog(None)
+    v.set_dialog("private")
+    assert v.speakers.voices.shown() == []

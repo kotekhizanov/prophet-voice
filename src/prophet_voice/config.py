@@ -36,6 +36,7 @@ DEFAULTS = {
     "groq_key": "",
     "threshold": 0.8,  # Vosk's confidence the wake word needs
     "microphone": "",  # an input device's name; empty: the system's
+    "speakers": True,  # Private: tell voices apart and label what each says
     "settings_port": 8771,
     "words": words.defaults(),
 }
@@ -109,6 +110,12 @@ def _threshold(value) -> float:
     return value
 
 
+def _flag(value) -> bool:
+    if not isinstance(value, bool):
+        raise SettingsError("on or off: true or false")
+    return value
+
+
 def _port(value) -> int:
     try:
         value = int(value)
@@ -140,6 +147,7 @@ CHECKS = {
     "groq_key": _groq_key,
     "threshold": _threshold,
     "microphone": _text("the microphone", 200),
+    "speakers": _flag,
     "settings_port": _port,
     "words": _words,
 }
@@ -180,6 +188,12 @@ def _plugin_settings() -> dict:
                 "default": DEFAULTS["threshold"],
                 "minimum": 0.3,
                 "maximum": 0.99,
+            },
+            "speakers": {
+                "type": "boolean",
+                "title": "Tell voices apart",
+                "description": "Private: each line says whose voice it is.",
+                "default": DEFAULTS["speakers"],
             },
             "whisper_model": choice(
                 "Whisper's local model",

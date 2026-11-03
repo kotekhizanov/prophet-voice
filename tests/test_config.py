@@ -98,7 +98,7 @@ def test_the_plugin_settings_fit_prophets_rules():
     fields = {"type", "title", "description", "default", "enum", "minimum", "maximum", "maxLength"}
     for name, spec in schema["properties"].items():
         assert re.fullmatch(r"[a-z0-9_]+", name)
-        assert spec["type"] in ("string", "number") and set(spec) <= fields
+        assert spec["type"] in ("string", "number", "boolean") and set(spec) <= fields
         assert len(spec["title"]) <= 300 and len(spec["description"]) <= 300
         assert spec["default"] == config.DEFAULTS[name]
         assert config.CHECKS[name](spec["default"]) == spec["default"]
