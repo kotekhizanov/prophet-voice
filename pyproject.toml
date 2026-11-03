@@ -1,6 +1,6 @@
 [project]
 name = "prophet-voice"
-version = "0.5.0"
+version = "0.6.0"
 description = "prophet-voice: talk to Prophet aloud, a client with a key from Settings → Clients"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -20,6 +20,7 @@ audio = [
     "av<19",  # faster-whisper 1.2.1 passes av.open() an argument PyAV 19 dropped
     "torch>=2.5",
     "scipy>=1.14",  # Silero's model imports it
+    "sherpa-onnx>=1.12",  # telling voices apart
 ]
 
 [project.scripts]

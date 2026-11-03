@@ -7,6 +7,9 @@ Whisper's model, or to repair a model whose download broke:
 - Vosk's small Russian model (about 45 MB, Apache-2.0), checked by its
   SHA-256: it hears the wake word;
 - Silero v5_ru (about 140 MB): it reads the answers aloud;
+- sherpa-onnx's speaker models (about 46 MB: pyannote's segmentation, MIT,
+  and 3D-Speaker's ERes2Net, Apache-2.0), checked by their SHA-256: they
+  tell the voices of a Private dialog apart;
 - faster-whisper's model from the settings (large-v3-turbo: about 1.6 GB),
   unless speech goes to Groq: it transcribes the phrases.
 
@@ -17,21 +20,28 @@ so a broken download is never taken for a model.
 import hashlib
 import importlib.util
 import shutil
+import tarfile
 import tempfile
 import zipfile
 from pathlib import Path
 
 import httpx
 
-from prophet_voice import config, ears, hearing, mouth
+from prophet_voice import config, ears, hearing, mouth, speakers
 
 VOSK_URL = f"https://alphacephei.com/vosk/models/{ears.VOSK_MODEL}.zip"
 VOSK_SHA256 = "961d5ff98a17f4aa6de69864d0aa71fa5bac682301d2b5d17a3f24c5c99a46d4"
+SHERPA = "https://github.com/k2-fsa/sherpa-onnx/releases/download"
+SEGMENTATION_URL = f"{SHERPA}/speaker-segmentation-models/{speakers.SEGMENTATION}.tar.bz2"
+SEGMENTATION_SHA256 = "24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488"
+EMBEDDING_URL = f"{SHERPA}/speaker-recongition-models/{speakers.EMBEDDING}"  # sic
+EMBEDDING_SHA256 = "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b"
 PACKAGES = {
     "sounddevice": "the microphone and the speakers",
     "vosk": "the wake word",
     "faster_whisper": "speech to text",
     "torch": "Silero's voice",
+    "sherpa_onnx": "telling voices apart",
 }
 
 
@@ -71,7 +81,7 @@ def vosk_model(models: Path) -> None:
         archive = Path(tmp) / "model.zip"
         download(VOSK_URL, archive, VOSK_SHA256)
         with zipfile.ZipFile(archive) as z:
-            z.extractall(tmp)
+            z.extractall(tmp)  # noqa: S202 - checked by its SHA-256 above
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(Path(tmp) / ears.VOSK_MODEL), target)
     print(f"Vosk: {target.name} is installed.")
@@ -83,6 +93,27 @@ def silero_model(models: Path) -> None:
         print("Silero: the voice")
         download(mouth.MODEL_URL.format(mouth.MODEL), target)
     print(f"Silero: {mouth.MODEL} is installed.")
+
+
+def speaker_models(models: Path) -> None:
+    here = speakers.models_dir(models)
+    if speakers.installed(models):
+        print("Voices: the speaker models are installed.")
+        return
+    print("Voices: the speaker models")
+    embedding = here / speakers.EMBEDDING
+    if not embedding.exists():
+        download(EMBEDDING_URL, embedding, EMBEDDING_SHA256)
+    with tempfile.TemporaryDirectory(dir=models) as tmp:
+        archive = Path(tmp) / "segmentation.tar.bz2"
+        download(SEGMENTATION_URL, archive, SEGMENTATION_SHA256)
+        with tarfile.open(archive) as t:
+            t.extractall(tmp, filter="data")
+        target = here / speakers.SEGMENTATION
+        if target.exists():
+            shutil.rmtree(target)
+        shutil.move(str(Path(tmp) / speakers.SEGMENTATION), target)
+    print("Voices: the speaker models are installed.")
 
 
 def whisper_model(models: Path, name: str) -> None:
@@ -112,6 +143,7 @@ def install(settings: dict) -> int:
     models.mkdir(parents=True, exist_ok=True)
     vosk_model(models)
     silero_model(models)
+    speaker_models(models)
     if settings["stt"] == "local":
         whisper_model(models, settings["whisper_model"])
     else:
