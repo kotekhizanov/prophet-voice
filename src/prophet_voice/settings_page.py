@@ -14,9 +14,9 @@ page there. The manifest's `settings` are the core's (config.PLUGIN_SETTINGS);
 this Mac's own (MAC: the microphone, the Groq key, the words) the voice keeps
 in settings.json, and the page reads and sets them here (`/api/settings`),
 tries the voice (`/api/say`) and asks whether the core knows the key
-(`/api/check`). The voices remembered by name (speakers.py) are listed with
-the settings and forgotten with `/api/voices`; the dialog's page names one
-heard in it (`/dialog/voice`). A key is never sent back: only whether one is set and its
+(`/api/check`). The voices remembered (speakers.py) are listed with the
+settings, and named or forgotten with `/api/voices`; the dialog's page names
+one heard in it (`/dialog/voice`). A key is never sent back: only whether one is set and its
 last four characters, and an empty field keeps it. The core's address, the
 client key and the port are not set from a page: another core could be given
 the key.
@@ -207,7 +207,7 @@ class Page(BaseHTTPRequestHandler):
                 {
                     "values": config.shown(config.load()),
                     "options": options(),
-                    "voices": voices().names(),
+                    "voices": voices().listed(),
                 },
             )
         self._json(404, {"error": "no such page"})
@@ -235,17 +235,25 @@ class Page(BaseHTTPRequestHandler):
         if self.path == "/api/check":
             return self._json(200, check_core(config.load()))
         if self.path == "/api/voices":
-            return self._forget(body if isinstance(body, dict) else {})
+            return self._voices(body if isinstance(body, dict) else {})
         self._say()
 
-    def _forget(self, body: dict) -> None:
-        """{"forget": a remembered voice's name}."""
-        name = body.get("forget")
-        if not isinstance(name, str) or not name:
-            return self._json(422, {"error": "which voice to forget"})
+    def _voices(self, body: dict) -> None:
+        """{"id": a remembered voice, and "name" (empty: a number again) or "forget": true}."""
+        voice_id, name = body.get("id"), body.get("name")
+        if not isinstance(voice_id, int) or isinstance(voice_id, bool):
+            return self._json(422, {"error": "which voice"})
+        if body.get("forget") is not True and not isinstance(name, str):
+            return self._json(422, {"error": "a name, or forget"})
         found = voices()
-        found.forget(name)
-        self._json(200, {"voices": found.names()})
+        try:
+            if body.get("forget") is True:
+                found.forget(voice_id)
+            else:
+                found.name(voice_id, name)
+        except ValueError as exc:
+            return self._json(422, {"error": str(exc)})
+        self._json(200, {"voices": found.listed()})
 
     def _set(self, changes: dict) -> None:
         """This Mac's settings, from Omniscient's page."""

@@ -92,7 +92,7 @@ function drawSettings(prophet, body, values, saved) {
       listened, microphone, slots.threshold),
     section("Speech to text", "Only the phrase you say to Prophet goes to Whisper, and to Groq only when you choose it.",
       slots.stt, slots.whisper_model, groq),
-    section("Voices", "In a Private dialog, when more than one person speaks, each line Prophet gets says whose it is. Name a voice on the dialog's page while it is heard; the names and the voices' prints stay on the Mac.",
+    section("Voices", "When more than one person speaks in a Private dialog, each line Prophet gets says whose it is. Name a voice on the dialog's page and it is remembered on the Mac, known by its name in the next dialogs; one left unnamed is forgotten when the dialog ends.",
       slots.speakers, remembered),
     section("Words", "One variant per line. The wake word is heard by Vosk before anything leaves the Mac, so each is one Russian word that Vosk's small model knows.", words),
     el("div", { class: `flex items-center gap-3 px-5 py-3 ${line}` }, error, state, save));
@@ -162,16 +162,25 @@ function drawSettings(prophet, body, values, saved) {
       return labelled(`w-${kind.name}`, kind.label, kind.hint, area);
     }));
   }
+  // Each named voice: its name, when it was last heard, Save and Forget.
   function fillVoices() {
-    remembered.replaceChildren(...(voices.length ? voices.map((name) => {
+    remembered.replaceChildren(...(voices.length ? voices.map((v) => {
+      const name = el("input", { id: id(`voice-${v.id}`), class: "input", type: "text", maxlength: "40", autocomplete: "off",
+        "aria-label": `Name of ${v.name}` });
+      name.value = v.name;
+      const keep = el("button", { type: "button", class: "btn btn-sm" }, "Save");
       const forget = el("button", { type: "button", class: "btn btn-sm" }, "Forget");
-      forget.onclick = async () => {
-        forget.disabled = true;
-        try { ({ voices } = await voice("/api/voices", { forget: name })); fillVoices(); }
-        catch (err) { error.textContent = err.message; forget.disabled = false; }
+      const change = (body, button) => async () => {
+        button.disabled = true; error.textContent = "";
+        try { ({ voices } = await voice("/api/voices", { id: v.id, ...body() })); fillVoices(); }
+        catch (err) { error.textContent = err.message; button.disabled = false; }
       };
-      return el("div", { class: "flex items-center gap-3" }, el("span", { class: "mr-auto text-sm" }, name), forget);
-    }) : [el("p", { class: "hint" }, "No voice is remembered yet.")]));
+      keep.onclick = change(() => ({ name: name.value.trim() || v.name }), keep);
+      forget.onclick = change(() => ({ forget: true }), forget);
+      name.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); keep.click(); } };
+      return el("div", { class: "flex items-center gap-3" },
+        el("div", { class: "min-w-0 flex-1" }, name, hint(v.heard ? `Last heard ${v.heard}` : "")), keep, forget);
+    }) : [el("p", { class: "hint" }, "No voice is named yet.")]));
   }
   function readMac() {
     return { microphone: input("microphone").value, groq_key: input("groq_key").value,

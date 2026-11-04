@@ -198,11 +198,13 @@ says whose it is:
 
 A phrase two people said in turn, with no pause between them, is split by
 Whisper's word times. Beside the cloud, the voices heard in the dialog have
-a field each: name one («Аня») and the voice knows her by name from then on,
-in the next dialogs too. The voices' prints are kept in
-`~/.config/prophet-voice/voices.json` (readable by you only) and forgotten
-on the voice's settings page (Voices). The setting "Tell voices apart"
-switches it off. People speaking at the same moment are not separated: their
+a field each: name one («Иван») and the voice remembers him, so in the next
+dialogs he is «Иван» from his first phrase. Each phrase he is heard in
+refines his print. A voice left unnamed is forgotten when the dialog ends.
+The prints are kept in `~/.config/prophet-voice/voices.json` (readable by
+you only); the voice's settings page (Voices) lists the named voices, to
+rename or forget. The setting "Tell voices apart" switches it off.
+People speaking at the same moment are not separated: their
 words go to whoever the voice hears more of.
 
 Chrome may ask once whether Omniscient may reach devices on the local

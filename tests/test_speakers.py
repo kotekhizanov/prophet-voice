@@ -17,62 +17,91 @@ def audio(seconds):
 def test_a_voice_keeps_its_number_through_the_dialog(home):
     v = Voices(home / "voices.json")
     first, second = v.who(ANYA), v.who(KOSTYA)
-    assert (first["id"], second["id"]) == (1, 2)
     assert v.who(ANYA + 0.1 * KOSTYA) is first  # near enough: the same voice
     assert [s["label"] for s in v.shown()] == ["Голос 1", "Голос 2"]
-    assert v.many()
+    assert v.many() and second["id"] != first["id"]
     v.new_dialog()
     assert v.shown() == [] and not v.many()
 
 
-def test_a_named_voice_is_known_in_the_next_dialogs(home):
+def test_a_named_voice_is_known_at_once_in_the_next_dialogs(home):
+    path = home / "voices.json"
+    v = Voices(path)
+    v.who(KOSTYA), v.who(ANYA)
+    v.name(v.shown()[1]["id"], "Иван")
+    assert [s["label"] for s in v.shown()] == ["Голос 1", "Иван"]
+    assert os.stat(path).st_mode & 0o777 == 0o600
+    again = Voices(path)  # the next session
+    assert [x["name"] for x in again.listed()] == ["Иван"]
+    assert again.who(ANYA)["name"] == "Иван"
+    assert [s["label"] for s in again.shown()] == ["Иван"]
+
+
+def test_an_unnamed_voice_is_forgotten_when_the_dialog_ends(home):
     path = home / "voices.json"
     v = Voices(path)
     v.who(ANYA)
-    v.name(1, "Аня")
-    assert v.shown() == [{"id": 1, "label": "Аня", "named": True}]
-    assert os.stat(path).st_mode & 0o777 == 0o600
-    again = Voices(path)
-    assert again.names() == ["Аня"]
-    assert again.who(ANYA)["name"] == "Аня"
-    assert again.who(KOSTYA)["name"] is None
+    v.new_dialog()
+    assert v.who(ANYA)["name"] is None and v.shown()[0]["label"] == "Голос 1"
+    assert not path.exists()  # nothing named: nothing kept
+    assert Voices(path).listed() == []
 
 
-def test_a_name_is_forgotten(home):
-    v = Voices(home / "voices.json")
-    v.who(ANYA)
-    v.name(1, "Аня")
-    v.forget("Аня")
-    assert v.names() == [] and v.shown()[0]["label"] == "Голос 1"
-    assert Voices(home / "voices.json").names() == []
-    v.name(1, "Аня")
-    v.name(1, "")  # an empty name forgets it too
-    assert v.names() == []
+def test_a_named_voice_learns_from_each_phrase(home):
+    path = home / "voices.json"
+    v = Voices(path)
+    v.name(v.who(ANYA)["id"], "Аня")
+    for _ in range(10):
+        v.who(ANYA + 0.5 * KOSTYA)
+    learnt = Voices(path).voices[0]
+    assert learnt["prints"] == 11
+    assert 0.1 < float(learnt["print"] @ KOSTYA) < 0.45  # moved, not replaced
+
+
+def test_a_voice_is_renamed_and_forgotten(home):
+    path = home / "voices.json"
+    v = Voices(path)
+    voice_id = v.who(ANYA)["id"]
+    v.name(voice_id, "Аня")
+    v.name(voice_id, "Анна")
+    assert [x["name"] for x in Voices(path).listed()] == ["Анна"]
+    v.forget(voice_id)
+    assert Voices(path).listed() == []
+    assert v.shown()[0]["label"] == "Голос 1"  # in this dialog a number again
+    v.new_dialog()
+    assert v.voices == []
 
 
 def test_a_wrong_name_or_voice_is_refused(home):
     v = Voices(home / "voices.json")
-    v.who(ANYA)
+    voice_id = v.who(ANYA)["id"]
     for name in ("<script>", "1st", "x" * 41):
         with pytest.raises(ValueError):
-            v.name(1, name)
+            v.name(voice_id, name)
     with pytest.raises(ValueError, match="no such voice"):
-        v.name(9, "Аня")
+        v.name(voice_id + 9, "Аня")
     assert not (home / "voices.json").exists()
 
 
 def test_one_name_is_one_voice(home):
     v = Voices(home / "voices.json")
-    v.who(ANYA), v.who(KOSTYA)
-    v.name(1, "Аня")
-    v.name(2, "Аня")  # the owner named the wrong one first
+    a, b = v.who(ANYA)["id"], v.who(KOSTYA)["id"]
+    v.name(a, "Аня")
+    v.name(b, "Аня")  # the owner named the wrong one first
     assert [s["label"] for s in v.shown()] == ["Голос 1", "Аня"]
 
 
-def test_a_broken_file_is_no_voices(home):
+def test_an_older_file_and_a_broken_one(home):
     home.mkdir(parents=True)
-    (home / "voices.json").write_text("{not json")
-    assert Voices(home / "voices.json").names() == []
+    path = home / "voices.json"
+    path.write_text(
+        '{"voices": [{"name": "Аня", "print": [1, 0, 0]}, {"name": "<x>", "print": [0, 1, 0]}]}'
+    )
+    v = Voices(path)
+    assert [x["name"] for x in v.listed()] == ["Аня"]
+    assert v.who(KOSTYA)["id"] != v.listed()[0]["id"]
+    path.write_text("{not json")
+    assert Voices(path).listed() == []
 
 
 def test_a_phrase_of_two_voices_is_split_between_them(home):

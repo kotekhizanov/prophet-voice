@@ -295,16 +295,23 @@ def test_omniscient_names_a_voice_heard_in_the_dialog(page, voice):
     assert voice.named == (1, "Аня")
 
 
-def test_omniscient_lists_and_forgets_the_remembered_voices(page):
+def test_omniscient_lists_renames_and_forgets_the_named_voices(page):
     from prophet_voice.speakers import Voices
 
     v = Voices()
-    v.who([1.0, 0.0])
-    v.name(1, "Аня")
-    assert page.get("/api/settings", headers=FROM_OMNISCIENT).json()["voices"] == ["Аня"]
-    r = page.post("/api/voices", json={"forget": "Аня"}, headers=FROM_OMNISCIENT)
-    assert r.status_code == 200 and r.json()["voices"] == []
-    assert Voices().names() == []
-    assert page.post("/api/voices", json={}, headers=FROM_OMNISCIENT).status_code == 422
-    elsewhere = {"Origin": "http://evil.com"}
-    assert page.post("/api/voices", json={"forget": "x"}, headers=elsewhere).status_code == 403
+    voice_id = v.who([1.0, 0.0])["id"]
+    v.name(voice_id, "Иван")
+    listed = page.get("/api/settings", headers=FROM_OMNISCIENT).json()["voices"]
+    assert [(x["id"], x["name"]) for x in listed] == [(voice_id, "Иван")]
+
+    def change(origin=OMNISCIENT, **body):
+        return page.post("/api/voices", json=body, headers={"Origin": origin})
+
+    r = change(id=voice_id, name="Ваня")
+    assert r.status_code == 200 and r.json()["voices"][0]["name"] == "Ваня"
+    assert change(id=voice_id, name="<x>").status_code == 422
+    assert change(id=voice_id + 1, name="Ева").json()["error"] == "no such voice"
+    assert change(id=voice_id).status_code == 422
+    assert change("http://evil.com", id=voice_id, forget=True).status_code == 403
+    assert change(id=voice_id, forget=True).json()["voices"] == []
+    assert Voices().listed() == []
