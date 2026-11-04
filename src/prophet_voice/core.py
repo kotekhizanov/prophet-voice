@@ -64,7 +64,8 @@ class Core:
             raise
 
     async def chat(self, text: str, project: str | int | None = "") -> int:
-        body = {"text": text, "project": project or None}
+        # The core takes a project as text, its name or number; Omniscient gives a number.
+        body = {"text": text, "project": str(project) if project else None}
         return (await self._call("POST", "/chat", json=body))["run_id"]
 
     async def run(self, run_id: int, wait: int = 0) -> dict:

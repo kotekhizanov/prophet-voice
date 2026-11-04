@@ -36,6 +36,18 @@ def test_calls_carry_the_key_and_the_body():
     assert json.loads(r.content) == {"text": "Привет", "project": None}
 
 
+def test_a_project_goes_as_text():
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"run_id": 7})
+
+    asyncio.run(make(handler).chat("Привет", 12))
+    asyncio.run(make(handler).chat("Привет", "Дом"))
+    assert [b["project"] for b in seen] == ["12", "Дом"]
+
+
 def test_a_refusal_is_a_core_error_with_the_cores_words():
     async def go(status, body):
         return await make(lambda r: httpx.Response(status, json=body)).me()
