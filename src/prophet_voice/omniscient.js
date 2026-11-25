@@ -380,10 +380,10 @@ function dialogPage(prophet) {
   // The messages of the chat the dialog asks in, after the dialog began, read with the
   // owner's API while the dialog's page is open (Omniscient reads the chat only on its own
   // page). Shown as text: an answer's Markdown stays as it is.
-  let saidAfter = null, saidTimer = 0;
+  let saidAfter = null, saidTimer = 0, saidShown = "";
   const chatPath = () => { const p = sentProject ?? prophet.context().project; return "/api/messages" + (p ? `?project_id=${encodeURIComponent(p)}` : ""); };
   async function startSaid() {
-    clearTimeout(saidTimer); said.replaceChildren(make("p", "hint", {}, "Nothing yet."));
+    clearTimeout(saidTimer); saidShown = ""; said.replaceChildren(make("p", "hint", {}, "Nothing yet."));
     try { const msgs = await prophet.api(chatPath()); saidAfter = msgs.length ? msgs[msgs.length - 1].id : 0; } catch { saidAfter = 0; }
     saidTimer = setTimeout(readSaid, SAID_EVERY);
   }
@@ -391,9 +391,16 @@ function dialogPage(prophet) {
     if (prophet.context().tab === TAB && saidAfter !== null) {
       try {
         const msgs = (await prophet.api(chatPath())).filter((m) => m.id > saidAfter).slice(-SAID_MAX);
-        if (msgs.length) said.replaceChildren(...msgs.map((m) => make("div", "", {},
-          make("div", "hint", {}, m.role === "user" ? "You" : "Prophet"), make("p", "", {}, String(m.content ?? "")))));
-        said.scrollTop = said.scrollHeight;
+        // Drawn only when something changed, and the newest is followed only while the
+        // owner is at the bottom: once they scroll up to read, the place is kept.
+        const now = JSON.stringify(msgs.map((m) => [m.id, m.role, m.content]));
+        if (msgs.length && now !== saidShown) {
+          saidShown = now;
+          const at = said.scrollTop, atEnd = said.scrollHeight - at - said.clientHeight < 24;
+          said.replaceChildren(...msgs.map((m) => make("div", "", {},
+            make("div", "hint", {}, m.role === "user" ? "You" : "Prophet"), make("p", "", {}, String(m.content ?? "")))));
+          said.scrollTop = atEnd ? said.scrollHeight : at;
+        }
       } catch { /* the next look */ }
     }
     if (dialog || prophet.context().tab === TAB) saidTimer = setTimeout(readSaid, SAID_EVERY);
