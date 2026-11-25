@@ -131,7 +131,7 @@ def test_omniscient_may_read_the_manifest(page):
     # The core reads the same file from GitHub: it is the package's, and names this address.
     assert manifest["version"] == importlib.metadata.version("prophet-voice")
     assert manifest["server"] == f"http://127.0.0.1:{config.DEFAULTS['settings_port']}"
-    assert manifest["run"]["args"][-2:] == ["prophet-voice", "run"]
+    assert manifest["run"]["args"][-3:] == ["prophet-voice", "run", "--install"]
     r = page.get("/omniscient.js", headers={"Origin": OMNISCIENT})
     assert r.status_code == 200 and "export function activate(prophet)" in r.text
     assert r.headers["Content-Type"].startswith("text/javascript")

@@ -20,7 +20,8 @@
       "--extra",
       "audio",
       "prophet-voice",
-      "run"
+      "run",
+      "--install"
     ]
   },
   "settings": {

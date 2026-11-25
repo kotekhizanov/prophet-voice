@@ -86,7 +86,9 @@ Voice settings), once the voice is added there:
    open Omniscient by that address.
 
    The node clones the repository into `~/plugins/voice` and runs the
-   manifest's `run` there (`uv run --extra audio prophet-voice run`), unless
+   manifest's `run` there (`uv run --extra audio prophet-voice run --install`:
+   the packages, then the models that are missing, about 2 GB the first
+   time, so the voice is ready some minutes later), unless
    its config names a command for `voice` (below): that one wins. The
    address is `settings_port` in the settings file; another port there
    needs the same one in the manifest.

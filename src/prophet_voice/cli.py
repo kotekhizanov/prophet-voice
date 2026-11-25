@@ -22,7 +22,12 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("check", help="whether the core knows the key")
     say = commands.add_parser("say", help="read a text aloud")
     say.add_argument("text", nargs="+")
-    commands.add_parser("run", help="listen and speak")
+    run_ = commands.add_parser("run", help="listen and speak")
+    run_.add_argument(
+        "--install",
+        action="store_true",
+        help="download the models that are missing first (a node that installed the plugin)",
+    )
     args = parser.parse_args(argv)
 
     # A node that runs the voice reads its output through a pipe: a line each time.
@@ -62,6 +67,11 @@ def main(argv: list[str] | None = None) -> int:
         mouth.say(" ".join(args.text))
         mouth.wait()
         return 0
+    if args.install:
+        from prophet_voice.install import install
+
+        if code := install(settings):
+            return code
     from prophet_voice.voice import run, run_until_stopped
 
     code = run_until_stopped(run(settings, config.models()))
