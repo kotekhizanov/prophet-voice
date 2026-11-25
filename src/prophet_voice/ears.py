@@ -27,8 +27,10 @@ quiet: a bus's rumble and a room's hum stay mostly below it, a voice does not.
 `level` is that loudness for Omniscient's picture, 0 to 1.
 
 The microphone is open only while it is asked to be (`listen`'s `on`: a
-Private dialog), and its audio comes through the denoiser (denoise.py): the
-room's steady noise is taken out before anything hears it.
+Private dialog). Its audio comes first through `echo` (echo.py), which takes
+out Prophet's own voice as the speakers play it, and then through the
+denoiser (denoise.py), which takes out the room's steady noise, before
+anything hears it.
 
 The ears run in one thread: `hear` takes the microphone's blocks in order,
 and the callbacks are called from it.
@@ -39,6 +41,7 @@ import json
 import logging
 import queue
 import re
+import time
 import wave
 from collections import deque
 from pathlib import Path
@@ -369,8 +372,9 @@ def microphones() -> list[str]:
     return [d["name"] for d in sd.query_devices() if d["max_input_channels"] > 0]
 
 
-def listen(ears: Ears, device, on, stop, failed=None) -> None:
-    """The microphone's blocks, with the room's noise taken out, to the ears while
+def listen(ears: Ears, device, on, stop, failed=None, echo=None) -> None:
+    """The microphone's blocks, with Prophet's own voice (`echo`, told by the mouth
+    what plays) and the room's noise taken out, to the ears while
     `on` is set, until `stop` is (threading.Events). While `on` is not, the
     microphone is closed and nothing is heard; `failed(exc)` when it would not
     open (no microphone, or no permission), and `on` is cleared. `device()` is
@@ -379,10 +383,10 @@ def listen(ears: Ears, device, on, stop, failed=None) -> None:
 
     blocks: queue.Queue = queue.Queue()
 
-    def got(data, frames, time, status):
+    def got(data, frames, _time, status):
         if status:
             log.debug("microphone: %s", status)
-        blocks.put(bytes(data))
+        blocks.put((bytes(data), time.monotonic()))  # and when it ended
 
     while not stop.is_set():
         if not on.wait(0.5):
@@ -410,11 +414,11 @@ def listen(ears: Ears, device, on, stop, failed=None) -> None:
         try:
             while on.is_set() and not stop.is_set():
                 try:
-                    block = blocks.get(timeout=0.2)
+                    block, at = blocks.get(timeout=0.2)
                 except queue.Empty:
                     continue
                 try:
-                    ears.hear(quiet(block))
+                    ears.hear(quiet(block if echo is None else echo(block, at)))
                 except Exception:
                     log.exception("the ears failed on a block")
         finally:

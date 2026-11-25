@@ -20,6 +20,10 @@ Everything runs on this machine (a Mac with a microphone and speakers):
   goes through a noise suppressor first: the room's steady noise (a fan,
   the street's hum) is lowered by about 12 dB, band by band, and a voice
   passes.
+- The voice does not hear itself: what it plays through the speakers is
+  taken out of the microphone's audio before that, band by band (the delay
+  to the microphone and how much comes back are learnt as it speaks). Your
+  voice over Prophet's passes.
 - **Vosk** hears the wake word with a grammar of that one word. Until it is
   heard, no audio leaves the ears. Its confidence must reach the threshold
   in the settings.

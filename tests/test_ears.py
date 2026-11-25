@@ -417,3 +417,30 @@ def test_reset_forgets_what_was_heard():
     assert e.ears.state == "waiting" and not e.ears.phrase and not e.ears.recent
     assert e.ears.level == 0.0
 
+
+def test_the_microphones_blocks_come_through_the_echo(monkeypatch):
+    import sys
+    import threading
+    import time
+
+    took = []
+
+    def echo(block, at):
+        took.append(at)
+        return block
+
+    monkeypatch.setitem(sys.modules, "sounddevice", Microphone(blocks=3))
+    heard, on, stop = Heard(), threading.Event(), threading.Event()
+    on.set()
+    before = time.monotonic()
+    t = threading.Thread(
+        target=ears_.listen, args=(heard, lambda: "", on, stop), kwargs={"echo": echo}
+    )
+    t.start()
+    end = time.monotonic() + 3
+    while heard.blocks < 3 and time.monotonic() < end:
+        time.sleep(0.01)
+    stop.set()
+    t.join(3)
+    assert heard.blocks == 3 and len(took) == 3
+    assert all(before <= at <= time.monotonic() for at in took)  # when each block ended

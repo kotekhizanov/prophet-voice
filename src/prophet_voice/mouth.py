@@ -14,6 +14,8 @@ thread; the next piece is made while one sounds. `hush` stops it at once.
 While it speaks, the ears do not listen, or Prophet's own «Пророк» would wake
 it; `saying` is the piece being read. Any sound of this process counts as its
 speaking: the sample Omniscient's settings ask for is Prophet's voice too.
+What it plays, and when a hush cuts it off, it tells the `echo` it is given
+(echo.py), which takes Prophet's voice out of the microphone's audio.
 
 A cue («Ага?», «Окей…» in a Private dialog) is said in the same voice,
 quieter: its tone is its words and their punctuation (Silero's intonation
@@ -198,8 +200,9 @@ def tone(up: bool) -> np.ndarray:
 
 
 class Mouth:
-    def __init__(self, models: Path, load=None, out=None):
+    def __init__(self, models: Path, load=None, out=None, echo=None):
         self.models = models
+        self.echo = echo  # told what plays: the microphone hears it too
         self._load = load or load_silero
         self.out = out or Speakers()
         self._say = None
@@ -256,6 +259,8 @@ class Mouth:
         with self._lock:
             self._gen += 1
         self.out.stop()
+        if self.echo is not None:
+            self.echo.stopped()
 
     def wait(self, timeout: float = 120) -> None:
         """Until everything said so far has been read."""
@@ -323,6 +328,8 @@ class Mouth:
         self._play((samples.astype(np.float32) * volume).astype(np.int16))
 
     def _play(self, samples: np.ndarray) -> None:
+        if self.echo is not None:
+            self.echo.played(samples, RATE)
         self._playing = (samples, RATE, time.monotonic())
         try:
             self.out.play(samples, RATE)

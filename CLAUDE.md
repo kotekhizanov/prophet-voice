@@ -51,6 +51,7 @@ uv run --extra audio prophet-voice run   # for real, with a key from your own co
 | The core: /api/v1, events (SSE) | `src/prophet_voice/core.py` |
 | Wake word, phrases, the microphone | `src/prophet_voice/ears.py` |
 | Noise suppression of the microphone's audio | `src/prophet_voice/denoise.py` |
+| Prophet's own voice taken out of the microphone's audio | `src/prophet_voice/echo.py` |
 | Speech to text: faster-whisper, Groq | `src/prophet_voice/hearing.py` |
 | Who speaks: voices told apart (sherpa-onnx or Nemotron) and named | `src/prophet_voice/speakers.py` |
 | Reading aloud: Silero, the speakers | `src/prophet_voice/mouth.py` |

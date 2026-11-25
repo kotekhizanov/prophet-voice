@@ -10,6 +10,8 @@ the next phrase, with no wake word, is the answer.
 A cancel word after the wake word sends nothing and cancels the answer being
 prepared. While Prophet speaks the voice does not listen, but for a cancel
 word: said over Prophet, it hushes it and cancels the rest of its answer.
+What the mouth plays is taken out of the microphone's audio (echo.py), so
+the voice does not hear itself in a cancel word or in a phrase.
 Prophet never talks over the owner: an answer that comes while a phrase is
 heard waits for its end.
 
@@ -54,6 +56,7 @@ from prophet_voice import config, settings_page, speakers, words
 from prophet_voice import ears as ears_
 from prophet_voice.core import Core, CoreError
 from prophet_voice.dialog import Dialog
+from prophet_voice.echo import Echo
 from prophet_voice.hearing import Hearing
 from prophet_voice.mouth import Mouth
 
@@ -491,7 +494,8 @@ async def _run(settings: dict, models) -> None:
         if used:
             print(f"From Omniscient: {', '.join(used)}.")
 
-    mouth = Mouth(models)
+    echo = Echo()  # what the mouth plays is taken out of what the ears hear
+    mouth = Mouth(models, echo=echo)
     hearing = Hearing(settings, models)
     print("Loading the models…")
     recognizer = await asyncio.to_thread(ears_.load_vosk, models)
@@ -528,7 +532,7 @@ async def _run(settings: dict, models) -> None:
     threading.Thread(
         target=ears_.listen,
         args=(voice.ears, lambda: voice.device, voice.microphone, stop),
-        kwargs={"failed": voice.on_microphone_failed},
+        kwargs={"failed": voice.on_microphone_failed, "echo": echo},
         name="ears",
         daemon=True,
     ).start()

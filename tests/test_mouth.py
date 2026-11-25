@@ -185,3 +185,23 @@ def test_the_next_piece_is_made_while_one_sounds(tmp_path):
     out.hold.set()
     m.wait(5)
     assert len(out.played) == 2
+
+
+def test_the_mouth_tells_the_echo_what_plays_and_when_it_is_cut_off(tmp_path):
+    class Echo:
+        def __init__(self):
+            self.calls = []
+
+        def played(self, samples, rate):
+            self.calls.append(("played", len(samples), rate))
+
+        def stopped(self):
+            self.calls.append(("stopped",))
+
+    echo, out = Echo(), Out()
+    m = Mouth(tmp_path, load=fake_silero, out=out, echo=echo)
+    m.say("Привет.")
+    m.wait(2)
+    m.hush()
+    assert [c[0] for c in echo.calls] == ["played", "stopped"]
+    assert echo.calls[0][1] > 0 and echo.calls[0][2] == mouth.RATE
