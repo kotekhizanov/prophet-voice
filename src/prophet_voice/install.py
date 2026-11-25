@@ -10,6 +10,8 @@ Whisper's model, or to repair a model whose download broke:
 - sherpa-onnx's speaker models (about 46 MB: pyannote's segmentation, MIT,
   and 3D-Speaker's ERes2Net, Apache-2.0), checked by their SHA-256: they
   tell the voices of a Private dialog apart;
+- NVIDIA's Nemotron 3 Diarization (about 380 MB, OpenMDW), at a fixed
+  revision and checked by its SHA-256: the other diarizer to choose;
 - faster-whisper's model from the settings (large-v3-turbo: about 1.6 GB),
   unless speech goes to Groq: it transcribes the phrases.
 
@@ -36,12 +38,23 @@ SEGMENTATION_URL = f"{SHERPA}/speaker-segmentation-models/{speakers.SEGMENTATION
 SEGMENTATION_SHA256 = "24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488"
 EMBEDDING_URL = f"{SHERPA}/speaker-recongition-models/{speakers.EMBEDDING}"  # sic
 EMBEDDING_SHA256 = "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b"
+NEMOTRON_URL = (
+    f"https://huggingface.co/nvidia/{speakers.NEMOTRON}"
+    "/resolve/f667ed73aee57d40cc39428eb768b4fd87a0a29e/{}"
+)
+NEMOTRON_SHA256 = {
+    "config.json": "dd795ec07ffa09acf18d231aa3fa8642aa5c521760953754e02559a7413b6873",
+    "processor_config.json": "91726746788a024a2f0f2f699a6c3667f0d74e6a0e9288fc44fe3018e23af68e",
+    "model.safetensors": "c074d86335b3b794f8fa5edc25594558f128bdb3914d27806a3a5a2e44963cb6",
+}
 PACKAGES = {
     "sounddevice": "the microphone and the speakers",
     "vosk": "the wake word",
     "faster_whisper": "speech to text",
     "torch": "Silero's voice",
     "sherpa_onnx": "telling voices apart",
+    "transformers": "Nemotron, telling voices apart",
+    "librosa": "Nemotron's features",
 }
 
 
@@ -116,6 +129,16 @@ def speaker_models(models: Path) -> None:
     print("Voices: the speaker models are installed.")
 
 
+def nemotron_model(models: Path) -> None:
+    here = speakers.models_dir(models) / speakers.NEMOTRON
+    if not speakers.nemotron_installed(models):
+        print("Voices: Nemotron 3 Diarization")
+        for name in speakers.NEMOTRON_FILES:
+            if not (here / name).exists():
+                download(NEMOTRON_URL.format(name), here / name, NEMOTRON_SHA256[name])
+    print("Voices: Nemotron is installed.")
+
+
 def whisper_model(models: Path, name: str) -> None:
     target = hearing.model_dir(models, name)
     if (target / "model.bin").exists():
@@ -144,6 +167,7 @@ def install(settings: dict) -> int:
     vosk_model(models)
     silero_model(models)
     speaker_models(models)
+    nemotron_model(models)
     if settings["stt"] == "local":
         whisper_model(models, settings["whisper_model"])
     else:

@@ -1,6 +1,6 @@
 [project]
 name = "prophet-voice"
-version = "0.6.1"
+version = "0.7.0"
 description = "prophet-voice: talk to Prophet aloud, a client with a key from Settings → Clients"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -21,6 +21,8 @@ audio = [
     "torch>=2.5",
     "scipy>=1.14",  # Silero's model imports it
     "sherpa-onnx>=1.12",  # telling voices apart
+    "transformers>=5.22",  # Nemotron 3 Diarization, the other way to
+    "librosa>=0.10",  # Nemotron's features
 ]
 
 [project.scripts]

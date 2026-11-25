@@ -71,12 +71,14 @@ class Hearing:
     def configure(self, settings):
         self.settings = settings
 
-    def transcribe(self, audio, timed=False):
-        """A text, or a phrase's words as (start, end, word): with `timed`, both."""
-        said = self.texts.pop(0)
-        if isinstance(said, str):
-            return (said, [(0.0, 1.0, said)]) if timed else said
-        return (" ".join(w for _, _, w in said).strip(), said) if timed else said
+    def transcribe(self, audio):
+        """The next text; a dict of them gives each the audio whose middle sample
+        is its key (each second of a test phrase says which it is)."""
+        said = self.texts[0]
+        if isinstance(said, dict):
+            middle = (len(audio) - 44) // 4 * 2 + 44
+            return said[int.from_bytes(audio[middle : middle + 2], "little")]
+        return self.texts.pop(0)
 
 
 class Ears:
@@ -614,26 +616,28 @@ def test_private_with_one_voice_says_nothing_of_whose_it_is():
 
 
 def test_private_with_two_voices_says_who_said_what():
+    from prophet_voice.ears import wav
+
     core = Core([("run", {"run_id": 5, "status": "done"})])
-    timed = [
-        (0.1, 0.5, " Какая"),
-        (0.6, 0.9, " погода?"),
-        (1.3, 1.8, " Купи"),
-        (1.9, 2.2, " хлеб."),
-    ]
-    phrases = [(0.0, 1.0, ANYA), (1.2, 2.4, KOSTYA)], [(0.0, 1.0, ANYA)]
-    v = private_with_voices(core, Speakers(*phrases), timed, "Ага? И отмена будильника.")
+    phrase = wav([n.to_bytes(2, "little") * 16000 for n in (1, 2, 3, 4)])  # four seconds
+    parts = [(0.0, 1.0, ANYA), (1.0, 2.0, KOSTYA), (2.0, 3.0, ANYA), (3.0, 4.0, KOSTYA)]
+    # Each turn goes to Whisper on its own; the whole phrase too, while it is split.
+    texts = {1: "Привет", 2: "Привет", 3: "Как дела?", 4: "Хорошо"}
+    v = private_with_voices(core, Speakers(parts, [(0.0, 1.0, ANYA)]), texts)
 
     async def go():
-        await v.handle(b"", True)
+        await v.handle(phrase, True)
         v.speakers.voices.name(1, "Аня")
-        await v.handle(b"", True)  # one voice now, but the dialog has heard two
+        v.hearing.texts = ["Ага? И отмена будильника."]
+        await v.handle(phrase, True)  # one voice now, but the dialog has heard two
 
     asyncio.run(go())
-    assert core.calls == [
-        ("chat", "Голос 1: Какая погода?\nГолос 2: Купи хлеб.", None),
-        ("chat", "Аня: И отмена будильника.", None),
-    ]
+    assert core.calls[0] == (
+        "chat",
+        "Голос 1: Привет\nГолос 2: Привет\nГолос 1: Как дела?\nГолос 2: Хорошо",
+        None,
+    )
+    assert core.calls[1] == ("chat", "Аня: И отмена будильника.", None)
     assert [s["label"] for s in v.speakers.voices.shown()] == ["Аня", "Голос 2"]
 
 
@@ -643,6 +647,13 @@ def test_voices_are_not_told_apart_when_switched_off():
     v.tell_apart = False
     asyncio.run(v.handle(b"", True))  # Speakers() has no phrase: it is not asked
     assert core.calls == [("chat", "Какая погода?", None)]
+
+
+def test_the_diarizer_is_the_one_set_as_a_dialog_begins():
+    v = private_with_voices(Core(), Speakers())
+    v.speakers.use = "sherpa"
+    v.configure({**config.load(), "diarizer": "nemotron"})
+    assert v.speakers.use == "nemotron"
 
 
 def test_a_new_dialog_hears_its_voices_anew():

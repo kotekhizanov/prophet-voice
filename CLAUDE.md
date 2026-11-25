@@ -27,7 +27,7 @@ serves the plugin and waits for one.
    `~/.config/prophet-voice/settings.json`: it keeps the client key and the
    Groq key. The voice never sends a key back to a page.
 4. **Tests use their own settings folder** (`tests/conftest.py` sets
-   `PROPHET_VOICE_HOME`) and fakes for Vosk, Whisper, Silero, sherpa-onnx, the speakers
+   `PROPHET_VOICE_HOME`) and fakes for Vosk, Whisper, Silero, sherpa-onnx, Nemotron, the speakers
    and the core. Never point a test at a real core.
 5. **Commit, push or open a PR only when asked**, in small commits that each
    do one reviewable thing.
@@ -52,7 +52,7 @@ uv run --extra audio prophet-voice run   # for real, with a key from your own co
 | Wake word, phrases, the microphone | `src/prophet_voice/ears.py` |
 | Noise suppression of the microphone's audio | `src/prophet_voice/denoise.py` |
 | Speech to text: faster-whisper, Groq | `src/prophet_voice/hearing.py` |
-| Who speaks: voices told apart and named (sherpa-onnx) | `src/prophet_voice/speakers.py` |
+| Who speaks: voices told apart (sherpa-onnx or Nemotron) and named | `src/prophet_voice/speakers.py` |
 | Reading aloud: Silero, the speakers | `src/prophet_voice/mouth.py` |
 | The conversation | `src/prophet_voice/voice.py` |
 | The words it hears and says | `src/prophet_voice/words.py` |

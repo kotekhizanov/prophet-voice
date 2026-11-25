@@ -113,23 +113,64 @@ def test_a_phrase_of_two_voices_is_split_between_them(home):
     def embed(x):
         return prints[0] if len(x) > 1.5 * speakers.RATE else prints[1]  # Аня's two parts
 
-    s = Speakers(diarize, embed, Voices(home / "voices.json"))
+    s = Speakers({"sherpa": diarize}, embed, Voices(home / "voices.json"))
     parts = s.parts(audio(3))
     assert [(a, b, v["id"]) for a, b, v in parts] == [(0.0, 1.0, 1), (1.2, 2.0, 2), (2.2, 3.0, 1)]
 
 
 def test_a_phrase_of_one_voice_is_that_voice(home):
-    s = Speakers(lambda x: [(0.2, 1.5, 0)], lambda x: OTHER, Voices(home / "voices.json"))
+    s = Speakers(
+        {"sherpa": lambda x: [(0.2, 1.5, 0)]}, lambda x: OTHER, Voices(home / "voices.json")
+    )
     parts = s.parts(audio(2))
     assert [(a, b, v["id"]) for a, b, v in parts] == [(0.0, 2.0, 1)]
     assert s.parts(audio(0.2)) == []  # too short to tell whose
 
 
-def test_whispers_words_go_to_who_spoke_them():
+def test_the_diarizer_set_is_used_and_sherpa_without_it(home):
+    asked = []
+
+    def diarizer(name):
+        return lambda x: asked.append(name) or [(0.0, 1.0, 0), (1.2, 2.0, 1)]
+
+    embed = lambda x: ANYA if len(x) > 0.9 * speakers.RATE else KOSTYA  # noqa: E731
+    s = Speakers({"sherpa": diarizer("sherpa")}, embed, Voices(home / "voices.json"))
+    s.use = "nemotron"  # not loaded: sherpa does it
+    s.parts(audio(2))
+    s.diarizers["nemotron"] = diarizer("nemotron")
+    assert len(s.parts(audio(2))) == 2
+    assert asked == ["sherpa", "nemotron"]
+
+
+def test_a_diarizers_crumb_of_a_part_is_dropped(home):
+    found = [(0.0, 1.0, 0), (1.0, 1.1, 1), (1.2, 2.0, 0)]  # Nemotron leaves such crumbs
+    s = Speakers({"sherpa": lambda x: found}, lambda x: ANYA, Voices(home / "voices.json"))
+    assert [(a, b) for a, b, _ in s.parts(audio(2))] == [(0.0, 2.0)]  # one voice: all of it
+
+
+def test_a_voice_that_said_little_is_still_its_own(home):
+    found = [(0.0, 1.5, 0), (1.6, 1.95, 1)]  # «да»: 0.35 s
+    embed = lambda x: ANYA if len(x) > speakers.RATE else KOSTYA  # noqa: E731
+    s = Speakers({"sherpa": lambda x: found}, embed, Voices(home / "voices.json"))
+    assert [v["id"] for _, _, v in s.parts(audio(2))] == [1, 2]
+
+
+def test_a_phrase_is_cut_into_turns():
     anya, kostya = {"id": 1, "name": "Аня"}, {"id": 2, "name": None}
-    parts = [(0.0, 1.0, anya), (1.2, 2.0, kostya), (2.2, 3.0, anya)]
-    timed = [(0.1, 0.4, " Какая"), (0.5, 0.9, " погода?"), (1.1, 1.3, " А"),  # between: nearest
-             (1.4, 1.9, " хлеб?"), (2.3, 2.8, " Завтра."), (3.5, 3.6, " ")]  # fmt: skip
-    turns = speakers.turns(parts, timed)
-    assert turns == [(anya, "Какая погода?"), (kostya, "А хлеб?"), (anya, "Завтра.")]
-    assert [speakers.label(v) for v, _ in turns] == ["Аня", "Голос 2", "Аня"]
+    parts = [(0.0, 1.0, anya), (1.2, 2.0, kostya), (2.2, 2.6, kostya), (2.4, 2.5, anya),
+             (2.8, 3.5, anya), (3.4, 4.0, kostya)]  # fmt: skip
+    assert speakers.turns(parts, 4.5) == [
+        (anya, 0.0, 1.2),
+        (kostya, 1.2, 2.8),  # his two parts in a row, and Аня's «м-м» said over him
+        (anya, 2.8, 3.5),
+        (kostya, 3.5, 4.5),  # from where she ended to the phrase's end
+    ]
+    assert speakers.turns([], 2.0) == []
+
+
+def test_a_turn_is_cut_out_a_little_wider():
+    whole = wav([b"\1\0" * speakers.RATE, b"\2\0" * speakers.RATE])  # two seconds
+    with __import__("wave").open(__import__("io").BytesIO(speakers.clip(whole, 0.5, 1.5))) as w:
+        frames = w.readframes(w.getnframes())
+    assert len(frames) // 2 == int(1.3 * speakers.RATE)
+    assert frames[:2] == b"\1\0" and frames[-2:] == b"\2\0"

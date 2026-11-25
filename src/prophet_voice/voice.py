@@ -21,9 +21,9 @@ once: what it says, the phrases being heard, the answers it waits for (the
 core's run goes on, and its answer is in the chat).
 
 In a Private dialog the voices are told apart (speakers.py, the "speakers"
-setting): once more than one has been heard, each line of the question says
-whose it is, «Аня: …», and a phrase two people said is split between them by
-Whisper's word times.
+setting, by the "diarizer" one): once more than one has been heard, each
+line of the question says whose it is, «Аня: …». A phrase two people said
+is cut into their turns, and each turn goes to Whisper on its own.
 
 Only one voice runs on this machine: a second `run` refuses to start, or two
 would hear the same phrase and answer it together.
@@ -57,6 +57,7 @@ from prophet_voice.mouth import Mouth
 
 log = logging.getLogger("prophet_voice.voice")
 AFTER_QUESTION = 8  # seconds to begin answering a question Prophet asked aloud
+TURNS_AT_ONCE = 6  # turns of a phrase transcribed at once
 FINAL = ("done", "failed", "cancelled", "paused")
 DIALOGS = ("casual", "private")
 CUE_VOLUME = {"begun": 0.5, "heard": 0.9}
@@ -159,6 +160,8 @@ class Voice:
             settings["microphone"],
             settings["speakers"],
         )
+        if self.speakers is not None:
+            self.speakers.use = settings["diarizer"]
         if self.ears is not None:
             self.ears.configure(settings["words"], settings["threshold"])
         self.hearing.configure(settings)
@@ -267,18 +270,22 @@ class Voice:
 
     def _turns(self, audio: bytes) -> list[tuple[dict | None, str]]:
         """Who said what in a Private phrase (in a worker thread): [(voice, text)].
-        Whisper hears it while the voices are told apart, not after."""
-        with concurrent.futures.ThreadPoolExecutor(1) as pool:
-            heard = pool.submit(self.hearing.transcribe, audio, True)
+        Whisper hears the whole phrase while the voices are told apart; with more
+        than one, each turn instead, all at once."""
+        with concurrent.futures.ThreadPoolExecutor(TURNS_AT_ONCE) as pool:
+            whole = pool.submit(self.hearing.transcribe, audio)
             try:
                 parts = self.speakers.parts(audio)
             except Exception:
                 log.exception("could not tell the voices apart")
                 parts = []
-            text, timed = heard.result()
-        if len({v["id"] for _, _, v in parts}) <= 1:
-            return [(parts[0][2] if parts else None, text)]
-        return speakers.turns(parts, timed)
+            if len({v["id"] for _, _, v in parts}) <= 1:
+                return [(parts[0][2] if parts else None, whole.result())]
+            heard = [
+                (voice, pool.submit(self.hearing.transcribe, speakers.clip(audio, start, end)))
+                for voice, start, end in speakers.turns(parts, speakers.length(audio))
+            ]
+            return [(voice, text.result()) for voice, text in heard]
 
     def _alone(self, turns, labelled: bool) -> tuple[str, str]:
         """A Private phrase as it goes to the chat, each line with whose it is when
@@ -478,9 +485,16 @@ async def _run(settings: dict, models) -> None:
     voice = Voice(settings, core, mouth, hearing)
     try:
         diarize, embed = await asyncio.to_thread(speakers.load_sherpa, models)
-        voice.speakers = speakers.Speakers(diarize, embed)
+        voice.speakers = speakers.Speakers({"sherpa": diarize}, embed)
+        voice.speakers.use = settings["diarizer"]
     except Exception as exc:  # not installed: one voice, as before
         print(f"Voices are not told apart: {exc}")
+    if voice.speakers is not None:
+        try:
+            nemotron = await asyncio.to_thread(speakers.load_nemotron, models)
+            voice.speakers.diarizers["nemotron"] = nemotron
+        except Exception as exc:  # sherpa does it
+            print(f"Nemotron does not tell voices apart: {exc}")
     voice.from_omniscient = plugin["settings"] if plugin is not None else {}
     voice.ears = ears_.Ears(
         settings["words"],

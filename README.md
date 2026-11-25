@@ -63,6 +63,7 @@ downloads the models into `~/.config/prophet-voice/models`, each once:
 | Silero `v5_ru` | 140 MB | Prophet's voice |
 | faster-whisper `large-v3-turbo` (or the one in the settings) | 1.6 GB | speech to text |
 | sherpa-onnx: pyannote's segmentation and 3D-Speaker's ERes2Net (checked by SHA-256) | 46 MB | telling voices apart |
+| NVIDIA Nemotron 3 Diarization (a fixed revision, checked by SHA-256) | 380 MB | telling voices apart, the other way |
 
 Run `prophet-voice install` again after choosing another Whisper model. With
 speech going to Groq, no Whisper model is downloaded (and Groq then has no
@@ -204,6 +205,14 @@ refines his print. A voice left unnamed is forgotten when the dialog ends.
 The prints are kept in `~/.config/prophet-voice/voices.json` (readable by
 you only); the voice's settings page (Voices) lists the named voices, to
 rename or forget. The setting "Tell voices apart" switches it off.
+
+"Who speaks when" chooses what finds where each voice speaks in a phrase:
+sherpa-onnx (pyannote's segmentation, lighter) or NVIDIA's Nemotron 3
+Diarization (Transformers, on the Mac's CPU: about 0.05 s a phrase, and it
+hears a change of voice sherpa may miss). Both are loaded as the voice
+starts, so a change counts from the next dialog; the log says which split
+each phrase («nemotron: 3 parts, 2 voices»). The names and the prints are
+the same for both.
 People speaking at the same moment are not separated: their
 words go to whoever the voice hears more of.
 

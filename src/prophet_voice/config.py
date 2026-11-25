@@ -25,6 +25,7 @@ from prophet_voice import words
 
 WHISPER_MODELS = ("small", "medium", "large-v3", "large-v3-turbo")
 STT = ("local", "groq")
+DIARIZERS = ("sherpa", "nemotron")  # which finds where each voice speaks (speakers.py)
 SECRETS = ("key", "groq_key")  # never shown again, only replaced
 
 DEFAULTS = {
@@ -37,6 +38,7 @@ DEFAULTS = {
     "threshold": 0.8,  # Vosk's confidence the wake word needs
     "microphone": "",  # an input device's name; empty: the system's
     "speakers": True,  # Private: tell voices apart and label what each says
+    "diarizer": "sherpa",  # which finds where each voice speaks: sherpa or nemotron
     "settings_port": 8771,
     "words": words.defaults(),
 }
@@ -148,6 +150,7 @@ CHECKS = {
     "threshold": _threshold,
     "microphone": _text("the microphone", 200),
     "speakers": _flag,
+    "diarizer": _choice("the diarizer", DIARIZERS),
     "settings_port": _port,
     "words": _words,
 }
@@ -195,6 +198,12 @@ def _plugin_settings() -> dict:
                 "description": "Private: each line says whose voice it is.",
                 "default": DEFAULTS["speakers"],
             },
+            "diarizer": choice(
+                "Who speaks when",
+                DIARIZERS,
+                "diarizer",
+                "sherpa: lighter; nemotron: NVIDIA's, hears more changes.",
+            ),
             "whisper_model": choice(
                 "Whisper's local model",
                 WHISPER_MODELS,

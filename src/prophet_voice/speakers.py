@@ -1,10 +1,13 @@
 """Who speaks: the voices in a Private phrase, told apart and remembered.
 
 When two people talk to Prophet in turn, one phrase may hold both: the ears
-end a phrase only at a pause. sherpa-onnx, here on the Mac, finds where each
-voice speaks in it (pyannote's segmentation) and makes a print of each voice
-(3D-Speaker's ERes2Net, a vector: the closer two prints point, the likelier
-one voice). Nothing of it leaves the Mac.
+end a phrase only at a pause. Here on the Mac, a diarizer finds where each
+voice speaks in it, as the "diarizer" setting says: sherpa-onnx (pyannote's
+segmentation, then its prints clustered) or NVIDIA's Nemotron 3 Diarization
+(Transformers, on the CPU), which hears a change of voice sherpa misses.
+Then 3D-Speaker's ERes2Net, through sherpa-onnx, makes a print of each voice
+(a vector: the closer two prints point, the likelier one voice). Nothing of
+it leaves the Mac.
 
 A dialog's voices are numbered as they are first heard in it («Голос 2»),
 so the same voice keeps its label from phrase to phrase. The owner names one
@@ -34,6 +37,11 @@ from prophet_voice import config
 log = logging.getLogger("prophet_voice.speakers")
 RATE = 16000
 SEGMENTATION = "sherpa-onnx-pyannote-segmentation-3-0"
+NEMOTRON = "Nemotron-3-Diarization"
+NEMOTRON_FILES = ("config.json", "processor_config.json", "model.safetensors")
+MIN_PART = 0.3  # seconds: a diarizer's shorter part is dropped, its words go to a neighbour
+OVER = 0.6  # a part this much inside another voice's turn was said over it: left to that turn
+PAD = 0.15  # seconds around a turn cut out for Whisper: a word's edge is not lost
 EMBEDDING = "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
 # One voice through the Mac's microphone and the denoiser, in phrases of a few seconds,
 # prints less alike than in a clean recording (0.6–0.9): 0.45 made one person two, 0.3
@@ -41,7 +49,7 @@ EMBEDDING = "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
 SAME = 0.38  # cosine of two prints of one voice
 # sherpa cuts a phrase into parts finely; whether two parts are one voice is SAME's to say.
 CLUSTER = 0.5
-MIN_PRINT = 0.4  # seconds: a print of less says little
+MIN_PRINT = 0.4  # seconds: a phrase shorter is too little to say whose it is
 MAX_VOICES = 50  # remembered
 LEARN = 0.1  # how far a phrase moves its voice's print, once the voice has a few
 NAME = re.compile(r"^[^\W\d_](?:[\w .'-]{0,38}[^\W_])?$")
@@ -54,6 +62,10 @@ def models_dir(models: Path) -> Path:
 def installed(models: Path) -> bool:
     here = models_dir(models)
     return (here / SEGMENTATION / "model.onnx").exists() and (here / EMBEDDING).exists()
+
+
+def nemotron_installed(models: Path) -> bool:
+    return all((models_dir(models) / NEMOTRON / f).exists() for f in NEMOTRON_FILES)
 
 
 def voices_file() -> Path:
@@ -103,6 +115,30 @@ def load_sherpa(models: Path):
             return np.array(extractor.compute(stream), np.float32)
 
     return diarize, embed
+
+
+def load_nemotron(models: Path):
+    """Nemotron 3 Diarization from the models folder, on the CPU: `diarize(samples)`
+    is a list of (start, end, speaker)."""
+    import torch
+    from transformers import AutoModelForAudioFrameClassification, AutoProcessor
+
+    here = models_dir(models) / NEMOTRON
+    if not nemotron_installed(models):
+        raise RuntimeError("Nemotron is not installed: run `prophet-voice install`")
+    processor = AutoProcessor.from_pretrained(here, local_files_only=True)
+    model = AutoModelForAudioFrameClassification.from_pretrained(here, local_files_only=True)
+    model.eval()
+    lock = threading.Lock()
+
+    def diarize(x: np.ndarray) -> list[tuple[float, float, int]]:
+        with lock, torch.inference_mode():
+            inputs = processor(x, sampling_rate=RATE)
+            logits = model(**inputs).logits
+            found = processor.extract_speaker_dict(logits, inputs.get("attention_mask"))[0]
+        return [(float(s["Start"]), float(s["End"]), int(s["Speaker"])) for s in found]
+
+    return diarize
 
 
 def _unit(v) -> np.ndarray:
@@ -259,14 +295,24 @@ def label(voice: dict | None) -> str:
 
 
 class Speakers:
-    def __init__(self, diarize, embed, voices: Voices | None = None):
-        self.diarize, self.embed = diarize, embed
+    def __init__(self, diarizers: dict, embed, voices: Voices | None = None):
+        """`diarizers`: the ones loaded, by name (config.DIARIZERS); `use` picks one."""
+        self.diarizers, self.embed = diarizers, embed
         self.voices = voices or Voices()
+        self.use = config.DIARIZERS[0]
 
     def parts(self, wav: bytes) -> list[tuple[float, float, dict]]:
         """Where each voice speaks in the phrase: (start, end, voice), in order."""
         x = samples(wav)
-        found = self.diarize(x)
+        name = self.use if self.use in self.diarizers else next(iter(self.diarizers))
+        found = [(s, e, c) for s, e, c in self.diarizers[name](x) if e - s >= MIN_PART]
+        log.info(
+            "%s: %d parts, %d voices: %s",
+            name,
+            len(found),
+            len({c for _, _, c in found}),
+            " ".join(f"{s:.1f}-{e:.1f}:{c}" for s, e, c in found) or "none",
+        )
         clusters = sorted({c for _, _, c in found})
         if len(clusters) <= 1:  # one voice, or too little for the segmentation: the whole phrase
             if len(x) < MIN_PRINT * RATE:
@@ -274,27 +320,49 @@ class Speakers:
             return [(0.0, len(x) / RATE, self.voices.who(self.embed(x)))]
         voice_of = {}
         for c in clusters:
+            # Every voice the diarizer kept is printed, however little it said («да»):
+            # it heard another voice there.
             mine = [x[int(s * RATE) : int(e * RATE)] for s, e, k in found if k == c]
-            if sum(len(m) for m in mine) < MIN_PRINT * RATE:
-                continue
             voice_of[c] = self.voices.who(self.embed(np.concatenate(mine)))
         return [(s, e, voice_of[c]) for s, e, c in found if c in voice_of]
 
 
-def turns(parts: list[tuple[float, float, dict]], timed: list[tuple[float, float, str]]):
-    """Whisper's words, each given to the voice speaking at its middle (or the
-    nearest one): who said what, in order, as (voice, text)."""
-    out: list[tuple[dict | None, str]] = []
-    for start, end, word in timed:
-        word = word.strip()
-        if not word:
-            continue
-        middle = (start + end) / 2
-        voice = (
-            min(parts, key=lambda p: max(p[0] - middle, middle - p[1], 0.0))[2] if parts else None
-        )
+def turns(parts: list[tuple[float, float, dict]], length: float) -> list[tuple[dict, float, float]]:
+    """Who spoke when, a turn each: one voice's parts in a row joined, and a part
+    most of which another voice's turn already holds left to it (said over it).
+    The turns hold the whole phrase, `length` seconds: each runs on to the next,
+    so a word between the diarizer's parts is not lost."""
+    out: list[list] = []
+    for start, end, voice in sorted(parts, key=lambda p: p[0]):
         if out and out[-1][0] is voice:
-            out[-1] = (voice, f"{out[-1][1]} {word}")
-        else:
-            out.append((voice, word))
-    return out
+            out[-1][2] = max(out[-1][2], end)
+            continue
+        if out and min(end, out[-1][2]) - start > OVER * (end - start):
+            continue
+        if out:
+            start = max(start, out[-1][2])
+        out.append([voice, start, end])
+    for i, turn in enumerate(out):
+        turn[2] = out[i + 1][1] if i + 1 < len(out) else length
+    if out:
+        out[0][1] = 0.0
+    return [(v, s, e) for v, s, e in out]
+
+
+def length(wav: bytes) -> float:
+    with wave.open(io.BytesIO(wav)) as w:
+        return w.getnframes() / w.getframerate()
+
+
+def clip(wav: bytes, start: float, end: float) -> bytes:
+    """This stretch of the phrase, a little wider, as a WAV of its own."""
+    with wave.open(io.BytesIO(wav)) as w:
+        frames = w.readframes(w.getnframes())
+    first, last = max(0, int((start - PAD) * RATE)), int((end + PAD) * RATE)
+    out = io.BytesIO()
+    with wave.open(out, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(RATE)
+        w.writeframes(frames[first * 2 : last * 2])
+    return out.getvalue()

@@ -50,7 +50,8 @@ function settingsPage(prophet) {
   prophet.ui.page({ id: "settings", title: "Voice settings", icon: "puzzle", render(body) { form = drawSettings(prophet, body, () => now, (v) => { now = v; }); } });
 }
 
-const LABELS = { stt: { local: "On this Mac", groq: "Groq first, then this Mac" } };
+const LABELS = { stt: { local: "On this Mac", groq: "Groq first, then this Mac" },
+  diarizer: { sherpa: "sherpa-onnx (pyannote)", nemotron: "NVIDIA Nemotron 3 Diarization" } };
 
 function drawSettings(prophet, body, values, saved) {
   const voiceAt = prophet.plugin.address;
@@ -73,7 +74,7 @@ function drawSettings(prophet, body, values, saved) {
     el("div", {}, el("h3", { class: "section-title" }, title), about ? hint(about) : null), ...kids);
 
   // The core's settings go into these places; this Mac's are drawn once the voice answers.
-  const slots = { project: el("div"), threshold: el("div"), stt: el("div"), whisper_model: el("div"), speakers: el("div") };
+  const slots = { project: el("div"), threshold: el("div"), stt: el("div"), whisper_model: el("div"), speakers: el("div"), diarizer: el("div") };
   const known = el("p", { class: "text-sm", "aria-live": "polite" }, "Asking the voice…");
   const check = el("button", { type: "button", class: "btn btn-sm" }, "Check");
   const listen = el("button", { type: "button", class: "btn btn-sm" }, "Listen");
@@ -93,7 +94,7 @@ function drawSettings(prophet, body, values, saved) {
     section("Speech to text", "Only the phrase you say to Prophet goes to Whisper, and to Groq only when you choose it.",
       slots.stt, slots.whisper_model, groq),
     section("Voices", "When more than one person speaks in a Private dialog, each line Prophet gets says whose it is. Name a voice on the dialog's page and it is remembered on the Mac, known by its name in the next dialogs; one left unnamed is forgotten when the dialog ends.",
-      slots.speakers, remembered),
+      slots.speakers, slots.diarizer, remembered),
     section("Words", "One variant per line. The wake word is heard by Vosk before anything leaves the Mac, so each is one Russian word that Vosk's small model knows.", words),
     el("div", { class: `flex items-center gap-3 px-5 py-3 ${line}` }, error, state, save));
   body.append(el("section", { class: "panel" }, form));
