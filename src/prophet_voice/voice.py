@@ -8,8 +8,10 @@ answer is read aloud, and a question Prophet asks the owner is read too and
 the next phrase, with no wake word, is the answer.
 
 A cancel word after the wake word sends nothing and cancels the answer being
-prepared. While Prophet speaks the voice does not listen. Prophet never
-talks over the owner: an answer that comes while a phrase is heard waits for its end.
+prepared. While Prophet speaks the voice does not listen, but for a cancel
+word: said over Prophet, it hushes it and cancels the rest of its answer.
+Prophet never talks over the owner: an answer that comes while a phrase is
+heard waits for its end.
 
 Omniscient's dialog button (the plugin's script) sets `dialog`. The
 microphone is open only in a Private dialog: it opens when the owner begins
@@ -187,6 +189,12 @@ class Voice:
     def on_begun(self) -> None:
         self.mouth.cue(words.pick(self.words["begun"]), CUE_VOLUME["begun"])
 
+    def on_stop(self) -> None:
+        """A cancel word said over Prophet: it falls silent at once."""
+        self.mouth.hush()
+        self.mouth.tone(False)
+        asyncio.run_coroutine_threadsafe(self._cancel(), self.loop)
+
     def on_phrase(self, audio: bytes, free: bool) -> None:
         if self.private:
             self.mouth.cue(words.pick(self.words["heard"]), CUE_VOLUME["heard"])
@@ -249,11 +257,8 @@ class Voice:
                 self.mouth.tone(False)
             return
         if words.cancelled(plain or said, self.words["cancel"]):
-            if self.run_id is not None:
-                try:
-                    await self.core.cancel(self.run_id)
-                except CoreError as exc:  # it ended meanwhile
-                    log.info("nothing to cancel: %s", exc)
+            self.mouth.hush()
+            await self._cancel()
             self.mouth.tone(False)
             return
         if self.question is not None:
@@ -267,6 +272,15 @@ class Voice:
         if not self.private:
             self.mouth.say(words.pick(self.words["ack"]))
         self.follow(run_id)
+
+    async def _cancel(self) -> None:
+        """The answer being prepared is cancelled in the core."""
+        if self.run_id is None:
+            return
+        try:
+            await self.core.cancel(self.run_id)
+        except CoreError as exc:  # it ended meanwhile
+            log.info("nothing to cancel: %s", exc)
 
     def _turns(self, audio: bytes) -> list[tuple[dict | None, str]]:
         """Who said what in a Private phrase (in a worker thread): [(voice, text)].
@@ -506,6 +520,7 @@ async def _run(settings: dict, models) -> None:
         voice.on_drop,
         voice.on_phrase,
         voice.on_begun,
+        voice.on_stop,
     )
     stop = threading.Event()
     serving = asyncio.create_task(voice.serve())

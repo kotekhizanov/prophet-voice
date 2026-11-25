@@ -3,7 +3,8 @@
 Each kind has one or more variants, set in the settings. Words heard before
 any audio goes to Whisper (the wake word) are heard by Vosk with a grammar,
 so each is one lowercase Russian word; Vosk ignores one it
-does not know. Cancel words are looked for in Whisper's text. What Prophet
+does not know. Cancel words are looked for in Whisper's text, and while
+Prophet speaks Vosk listens for them alone. What Prophet
 says (the greeting, «Понял») is a phrase, and a variant is picked at random
 each time.
 """
@@ -29,7 +30,7 @@ KINDS = {
         "Cancel",
         ("отмена",),
         "text",
-        "Said after the wake word: sends nothing, and cancels the answer being prepared.",
+        "Sends nothing and cancels the answer being prepared; said over Prophet, hushes it.",
     ),
     "hello": Kind("Greeting", ("Привет!",), "said", "Said when the voice or a dialog starts."),
     "ack": Kind(
@@ -140,6 +141,11 @@ def cue_only(said: str, kinds: dict[str, list[str]]) -> bool:
     }
     heard = {w.replace("ё", "е") for w in re.findall(r"[а-яёa-z]+", said.lower())}
     return bool(heard) and heard <= cues | set(MADE_UP)
+
+
+def said_in(text: str, variants: list[str]) -> bool:
+    """One of these variants is among the words of the text."""
+    return bool(re.search(rf"(?<![а-яё])(?:{_variants(variants)})(?![а-яё])", text, re.I))
 
 
 def cancelled(said: str, cancel: list[str]) -> bool:

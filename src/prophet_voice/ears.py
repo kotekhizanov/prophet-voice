@@ -8,8 +8,11 @@ Vosk's result comes at the end of an utterance, so a phrase said in one
 breath ("Пророк, что нового?") is already in the ring of recent audio.
 
 While Prophet speaks, the ears do not listen (`listening`): the microphone
-hears Prophet, not the owner, and Vosk is given nothing. Only a phrase
-already begun goes on, as the owner goes on speaking under a tone or a cue.
+hears Prophet, not the owner. Only a phrase already begun goes on, as the
+owner goes on speaking under a tone or a cue. While Prophet reads, Vosk
+listens with a grammar of the cancel words alone: one said over Prophet
+(«стоп») is `on_stop`, unless Prophet is saying that word itself. That
+audio goes nowhere else.
 For DEAF seconds after, Prophet's echo begins nothing. `listen_free` opens
 the next phrase with no wake word: after Prophet asks the owner something.
 
@@ -43,6 +46,7 @@ from pathlib import Path
 import numpy as np
 
 from prophet_voice.denoise import Denoiser
+from prophet_voice.words import said_in
 
 log = logging.getLogger("prophet_voice.ears")
 RATE = 16000  # Hz: what Vosk's and Whisper's models hear
@@ -81,6 +85,7 @@ class Ears:
         on_drop,
         on_phrase,
         on_begun=None,
+        on_stop=None,
     ):
         """`recognizer(grammar)` makes a Vosk recognizer (`VoskRecognizer`); a
         grammar of None is Vosk's whole vocabulary. `mouth` says whether
@@ -91,6 +96,8 @@ class Ears:
         self.mouth = mouth
         self.on_wake, self.on_drop, self.on_phrase = on_wake, on_drop, on_phrase
         self.on_begun = on_begun or (lambda: None)
+        self.on_stop = on_stop or (lambda: None)
+        self.stop = None  # the cancel words' grammar, while Prophet reads
         self.clock = 0.0  # seconds of audio heard, as Vosk's word times count them
         self.state = "waiting"  # or "phrase"
         self.recent: deque[tuple[float, bytes]] = deque()
@@ -141,7 +148,9 @@ class Ears:
         self.clock += seconds
         if not self.listening:
             self.was_speaking, self.renew, self.level = True, True, 0.0
+            self._stops(block)
             return
+        self.stop = None
         if self.renew:  # Vosk's times would skip the blocks it was not given
             self.wake = self.recognizer([*self.words["wake"], "[unk]"])
             self.wake_from, self.renew = at, False
@@ -184,6 +193,27 @@ class Ears:
             self._drop()
         elif spoke and (self.clock - self.last_voice > END_SILENCE or since > MAX_PHRASE):
             self._send()
+
+    # ---- a cancel word over Prophet ----------------------------------------------------
+
+    def _stops(self, block: bytes) -> None:
+        """While Prophet reads, a cancel word said over it. Vosk's partial result
+        finds the word at once; its final one says how sure it is."""
+        cancel, saying = self.words["cancel"], self.mouth.saying
+        if not saying:  # a tone, or another mouth's sound: nothing to stop
+            self.stop = None
+            return
+        if self.stop is None:
+            self.stop = self.recognizer([*cancel, "[unk]"])
+        found = self.stop.accept(block)
+        if found is None and said_in(self.stop.partial(), cancel):
+            found = self.stop.final()
+        if not found:
+            return
+        sure = " ".join(w["word"] for w in found if w.get("conf", 1.0) >= self.threshold)
+        if said_in(sure, cancel) and not said_in(saying, cancel):  # not Prophet's own
+            self.stop = None
+            self.on_stop()
 
     # ---- the wake word -------------------------------------------------------------
 
@@ -384,8 +414,7 @@ def listen(ears: Ears, device, on, stop, failed=None) -> None:
                 except queue.Empty:
                     continue
                 try:
-                    # while the ears do not listen, the denoiser's work is spared
-                    ears.hear(quiet(block) if ears.listening else block)
+                    ears.hear(quiet(block))
                 except Exception:
                     log.exception("the ears failed on a block")
         finally:

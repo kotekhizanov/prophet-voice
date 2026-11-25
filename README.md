@@ -37,7 +37,9 @@ Everything runs on this machine (a Mac with a microphone and speakers):
   Prophet, not you (its own «Пророк» would wake it). Only a phrase you have
   begun goes on under the tone or the cue.
 - A cancel word («Пророк, отмена») sends nothing and cancels the answer
-  being prepared.
+  being prepared. Said over Prophet while it reads («стоп», if you added
+  it), it hushes Prophet and cancels the rest of the answer: Vosk listens
+  for the cancel words alone then, and that audio goes nowhere.
 
 Tasks Prophet starts from the chat are not read aloud: their reports are in
 Omniscient.

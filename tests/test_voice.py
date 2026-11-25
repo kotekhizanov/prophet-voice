@@ -46,6 +46,7 @@ class Mouth:
     def __init__(self):
         self.said = []
         self.speaking = False
+        self.saying = ""
 
     def say(self, text):
         self.said.append(text)
@@ -148,7 +149,22 @@ def test_a_cancel_word_cancels_the_answer_being_prepared():
     v.run_id = 5
     asyncio.run(v.handle(b"", False))
     assert core.calls == [("cancel", 5)]
-    assert v.mouth.said == ["↓"]
+    assert v.mouth.said == ["hush", "↓"]
+
+
+def test_a_cancel_word_over_prophet_hushes_it_and_cancels_the_answer():
+    core = Core()
+    v = make(core)
+    v.run_id = 5
+
+    async def go():
+        v.loop = asyncio.get_running_loop()
+        await asyncio.to_thread(v.on_stop)  # from the ears' thread
+        await asyncio.sleep(0.05)
+
+    asyncio.run(go())
+    assert v.mouth.said == ["hush", "↓"]
+    assert core.calls == [("cancel", 5)]
 
 
 def test_a_question_is_read_and_the_next_phrase_answers_it():

@@ -22,6 +22,13 @@ def test_e_and_yo_are_alike():
     assert words.after_wake("Ёжик, привет", ["ежик"]) == "привет"
 
 
+def test_said_in_is_a_whole_word_anywhere():
+    assert words.said_in("[unk] стоп [unk]", ["отмена", "стоп"])
+    assert words.said_in("Ну всё, хватит уже!", ["хватит уже"])
+    assert not words.said_in("стопка", ["стоп"])
+    assert not words.said_in("", ["стоп"])
+
+
 def test_cancelled_at_the_start_or_the_end():
     cancel = ["отмена"]
     assert words.cancelled("отмена", cancel)

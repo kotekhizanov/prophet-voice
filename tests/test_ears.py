@@ -24,15 +24,16 @@ class Recognizers:
     """Vosk as a script: what each recognizer says after its n-th block.
 
     `plan[kind][n]` is the words of an utterance it finishes there; kinds are
-    "wake" (the wake word's grammar) and "whole" (no grammar, whose
-    `final` is `plan["whole"]["final"]`)."""
+    "wake" (the wake word's grammar), "stop" (the cancel words' one, whose
+    `partial` is `plan["stop"]["partial"]` from its first block on) and
+    "whole" (no grammar, whose `final` is `plan["whole"]["final"]`)."""
 
     def __init__(self, plan):
         self.plan = plan
         self.made = []
 
     def __call__(self, grammar):
-        kind = "whole" if grammar is None else "wake"
+        kind = "whole" if grammar is None else "wake" if "пророк" in grammar else "stop"
         r = Recognizer(self.plan.get(kind, {}), kind)
         self.made.append(r)
         return r
@@ -47,7 +48,7 @@ class Recognizer:
         return self.plan.get(self.n)
 
     def partial(self):
-        return ""
+        return self.plan.get("partial", "")
 
     def final(self):
         return self.plan.get("final", [])
@@ -75,6 +76,7 @@ class Ears_:
             on_drop=lambda: self.events.append(("drop",)),
             on_phrase=lambda audio, free: self.events.append(("phrase", seconds(audio), free)),
             on_begun=lambda: self.events.append(("begun",)),
+            on_stop=lambda: self.events.append(("stop",)),
         )
 
     def feed(self, block, n):
@@ -166,6 +168,41 @@ def test_while_prophet_speaks_the_ears_do_not_listen():
     e.feed(quiet(), 20)
     assert e.events == [("wake",)]
     assert len(e.recognizers.made) == 2
+
+
+def stopping(plan, saying="Длинный ответ."):
+    e = Ears_({"stop": plan})
+    e.ears.configure({**defaults(), "cancel": ["отмена", "стоп"]}, 0.8)
+    e.mouth.speaking, e.mouth.saying = True, saying
+    return e
+
+
+def test_a_cancel_word_over_prophet_stops_it():
+    # Vosk's partial result has the word at once; its final one is sure of it.
+    e = stopping({"partial": "стоп", "final": [word("стоп", 0.2, 0.5)]})
+    e.feed(loud(), 1)
+    assert e.events == [("stop",)]
+    assert e.ears.state == "waiting"  # no phrase: nothing goes to Whisper
+
+
+def test_a_cancel_word_at_the_end_of_an_utterance_stops_prophet():
+    e = stopping({10: [word("[unk]", 0.0, 0.2), word("стоп", 0.2, 0.4)]})
+    e.feed(loud(), 9)
+    assert e.events == []
+    e.feed(loud(), 1)
+    assert e.events == [("stop",)]
+
+
+def test_a_doubtful_cancel_word_stops_nothing():
+    e = stopping({"partial": "стоп", "final": [word("стоп", 0.2, 0.5, conf=0.5)]})
+    e.feed(loud(), 5)
+    assert e.events == []
+
+
+def test_prophets_own_cancel_word_stops_nothing():
+    e = stopping({"partial": "стоп", "final": [word("стоп", 0.2, 0.5)]}, "Знак «Стоп» стоит.")
+    e.feed(loud(), 5)
+    assert e.events == []
 
 
 def test_new_wake_words_make_a_new_recognizer():
@@ -379,3 +416,4 @@ def test_reset_forgets_what_was_heard():
     e.ears.reset()
     assert e.ears.state == "waiting" and not e.ears.phrase and not e.ears.recent
     assert e.ears.level == 0.0
+
