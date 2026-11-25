@@ -74,13 +74,22 @@ fallback).
 All of them are in Omniscient, on the voice's page in the menu (Plugins →
 Voice settings), once the voice is added there:
 
-1. **Add the voice.** With `prophet-voice run` running, open Omniscient in a
-   browser on this Mac, Settings → Plugins → Add plugin, address
-   `http://127.0.0.1:8771`. Omniscient reads the voice's manifest
-   (`/prophet-plugin.json`: the name `voice`, the `chat` scope), and after
-   you add it hands the new key to the voice (`/prophet/connect`). The voice
-   takes a key only from Omniscient at its core's address, so open
-   Omniscient by that address.
+1. **Add the voice.** In Omniscient, Settings → Plugins → Add plugin: the
+   GitHub address `https://github.com/kotekhizanov/prophet-voice/tree/main/src/prophet_voice`
+   (the folder with `prophet-plugin.json`) and the node on this Mac. The
+   core reads the manifest there (the name `voice`, the `chat` scope, the
+   voice's address `http://127.0.0.1:8772`) and the script, and after you
+   approve it Omniscient hands the new key to the voice
+   (`/prophet/connect`): open Omniscient in a browser on this Mac, with
+   `prophet-voice run` running, or press **New key** there once it runs.
+   The voice takes a key only from Omniscient at its core's address, so
+   open Omniscient by that address.
+
+   The node clones the repository into `~/plugins/voice` and runs the
+   manifest's `run` there (`uv run --extra audio prophet-voice run`), unless
+   its config names a command for `voice` (below): that one wins. The
+   address is `settings_port` in the settings file; another port there
+   needs the same one in the manifest.
 
    The core's address is `http://127.0.0.1:8770`, or the one a node that
    runs the voice gives it (below), or `PROPHET_URL`; `"core"` in the

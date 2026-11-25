@@ -1,12 +1,13 @@
 """The voice's address as a Prophet plugin, on this machine.
 
-`prophet-voice run` serves it from its start, so a voice with no key yet can
-be added: Omniscient's Settings → Plugins → Add plugin → http://127.0.0.1:8771
-(`settings_port`), on 127.0.0.1 only. `/prophet-plugin.json` says what the
-voice is and asks for the "chat" scope, and Omniscient hands the new key to
-`/prophet/connect`. Only Omniscient at the core's address in the settings
-may read the plugin (CORS) and talk to it: a key from elsewhere would send
-what the owner says to another core.
+`prophet-voice run` serves it from its start, on 127.0.0.1 only
+(`settings_port`, 8772), so a voice with no key yet can be given one. The
+owner adds the voice in Omniscient's Settings → Plugins by its folder on
+GitHub (src/prophet_voice): `prophet-plugin.json` there says what the voice
+is, asks for the "chat" scope and names this address (`server`), and
+Omniscient hands the new key to `/prophet/connect`. Only Omniscient at the
+core's address in the settings may read the plugin (CORS) and talk to it: a
+key from elsewhere would send what the owner says to another core.
 
 The plugin's script, `/omniscient.js`, is the dialog in Omniscient's chat
 (dialog.py: `POST /dialog`, `GET /dialog/events`) and the voice's settings
@@ -31,7 +32,6 @@ import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from importlib.metadata import version
 from importlib.resources import files
 from urllib.parse import parse_qs, urlsplit
 
@@ -42,18 +42,9 @@ from prophet_voice import config, dialog, install, mouth, speakers, words
 log = logging.getLogger("prophet_voice.settings")
 SAMPLE = "Здравствуйте! Я Пророк, так я буду читать ответы."
 MAX_BODY = 64 << 10
-MANIFEST = {  # Prophet's plugin manifest, API v1
-    "id": "voice",  # also the key's name: the chats show client:voice
-    "name": "Voice",
-    "version": version("prophet-voice"),
-    "api_version": 1,
-    "description": "Talk to Prophet aloud: say «Пророк» and your question.",
-    "homepage": "https://github.com/kotekhizanov/prophet-voice",
-    "scopes": ["chat"],
-    "script": "/omniscient.js",
-    "connect": "/prophet/connect",
-    "settings": config.PLUGIN_SETTINGS,
-}
+# Prophet's plugin manifest, API v1: the core reads this file from GitHub, and its
+# `server` is where the voice listens (config's settings_port).
+MANIFEST = json.loads(files("prophet_voice").joinpath("prophet-plugin.json").read_text("utf-8"))
 PAGE = re.compile(r"^[A-Za-z0-9-]{8,64}$")  # a page's name for itself
 PLUGIN = (
     "/prophet-plugin.json",

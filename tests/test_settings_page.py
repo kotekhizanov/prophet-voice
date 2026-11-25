@@ -1,3 +1,4 @@
+import importlib.metadata
 import json
 import socket
 import threading
@@ -127,6 +128,10 @@ def test_omniscient_may_read_the_manifest(page):
     assert manifest["scopes"] == ["chat"] and manifest["connect"] == "/prophet/connect"
     assert manifest["script"] == "/omniscient.js"
     assert manifest["settings"] == config.PLUGIN_SETTINGS
+    # The core reads the same file from GitHub: it is the package's, and names this address.
+    assert manifest["version"] == importlib.metadata.version("prophet-voice")
+    assert manifest["server"] == f"http://127.0.0.1:{config.DEFAULTS['settings_port']}"
+    assert manifest["run"]["args"][-2:] == ["prophet-voice", "run"]
     r = page.get("/omniscient.js", headers={"Origin": OMNISCIENT})
     assert r.status_code == 200 and "export function activate(prophet)" in r.text
     assert r.headers["Content-Type"].startswith("text/javascript")

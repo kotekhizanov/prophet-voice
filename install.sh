@@ -19,4 +19,5 @@ bin="$(uv tool dir --bin)"
 "${bin}/prophet-voice" install
 echo
 echo "Next: prophet-voice run   (then in Omniscient: Settings → Plugins → Add plugin,"
-echo "                           http://127.0.0.1:8771; set the voice on its page)"
+echo "                           the folder src/prophet_voice of this repository on GitHub;"
+echo "                           set the voice on its page)"

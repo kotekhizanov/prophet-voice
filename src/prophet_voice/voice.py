@@ -435,7 +435,8 @@ async def let_in(settings: dict) -> tuple[dict, Core, dict, dict | None]:
         if not settings["key"]:
             print(
                 "No client key yet: in Omniscient, Settings → Plugins → Add plugin, "
-                f"http://127.0.0.1:{settings['settings_port']}"
+                f"{settings_page.MANIFEST['homepage']} (the folder src/prophet_voice), "
+                "or New key there"
             )
             settings = await new_key("")
             continue

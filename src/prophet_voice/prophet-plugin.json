@@ -1,0 +1,84 @@
+{
+  "id": "voice",
+  "name": "Voice",
+  "version": "0.7.0",
+  "api_version": 1,
+  "description": "Talk to Prophet aloud: say «Пророк» and your question.",
+  "homepage": "https://github.com/kotekhizanov/prophet-voice",
+  "scopes": [
+    "chat"
+  ],
+  "script": "/omniscient.js",
+  "connect": "/prophet/connect",
+  "server": "http://127.0.0.1:8772",
+  "run": {
+    "command": "uv",
+    "args": [
+      "run",
+      "--python",
+      "3.12",
+      "--extra",
+      "audio",
+      "prophet-voice",
+      "run"
+    ]
+  },
+  "settings": {
+    "type": "object",
+    "properties": {
+      "stt": {
+        "type": "string",
+        "title": "Speech to text",
+        "description": "local: Whisper on the Mac; groq: Groq first.",
+        "enum": [
+          "local",
+          "groq"
+        ],
+        "default": "local"
+      },
+      "project": {
+        "type": "string",
+        "title": "The chat",
+        "description": "A project's name or number; empty: the general chat.",
+        "default": "",
+        "maxLength": 80
+      },
+      "threshold": {
+        "type": "number",
+        "title": "Wake word's threshold",
+        "description": "How sure Vosk must be of the wake word, 0.3–0.99.",
+        "default": 0.8,
+        "minimum": 0.3,
+        "maximum": 0.99
+      },
+      "speakers": {
+        "type": "boolean",
+        "title": "Tell voices apart",
+        "description": "Private: each line says whose voice it is.",
+        "default": true
+      },
+      "diarizer": {
+        "type": "string",
+        "title": "Who speaks when",
+        "description": "sherpa: lighter; nemotron: NVIDIA's, hears more changes.",
+        "enum": [
+          "sherpa",
+          "nemotron"
+        ],
+        "default": "sherpa"
+      },
+      "whisper_model": {
+        "type": "string",
+        "title": "Whisper's local model",
+        "description": "After a change, `prophet-voice install` on the Mac.",
+        "enum": [
+          "small",
+          "medium",
+          "large-v3",
+          "large-v3-turbo"
+        ],
+        "default": "large-v3-turbo"
+      }
+    }
+  }
+}

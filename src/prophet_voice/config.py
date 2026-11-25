@@ -39,7 +39,7 @@ DEFAULTS = {
     "microphone": "",  # an input device's name; empty: the system's
     "speakers": True,  # Private: tell voices apart and label what each says
     "diarizer": "sherpa",  # which finds where each voice speaks: sherpa or nemotron
-    "settings_port": 8771,
+    "settings_port": 8772,  # the manifest's `server` names it
     "words": words.defaults(),
 }
 KEY = re.compile(r"^pk_[A-Za-z0-9_-]{20,200}$")

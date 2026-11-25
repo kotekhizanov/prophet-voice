@@ -321,7 +321,7 @@ def test_with_no_key_the_voice_waits_for_one(monkeypatch, capsys):
 
     settings, core, me, plugin = asyncio.run(go())
     assert settings["key"] == KEY and let_in == [KEY] and me["name"] == "voice"
-    assert "Settings → Plugins → Add plugin, http://127.0.0.1:8771" in capsys.readouterr().out
+    assert "Settings → Plugins → Add plugin, https://github.com/" in capsys.readouterr().out
 
 
 def test_a_key_the_core_does_not_know_waits_for_a_new_one(monkeypatch, capsys):
