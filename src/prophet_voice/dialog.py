@@ -10,6 +10,12 @@ wake word for the captions, the phrase being said as far as it is heard
 (`text`), and in a Private dialog the voices heard in
 it (speakers.py), which the page may name (`POST /dialog/voice`).
 
+A dictation (voice.py) is asked for here too: `POST /dictation` begins or
+ends one for a page, and the stream's `dictation` has its phrases, numbered,
+for that page to put into the field where the cursor is: `count` of them so
+far and the last few (`phrases`), so none is missed between two snapshots.
+It ends with its page's stream as a dialog does.
+
 A dialog belongs to the page that began it (each page names itself, `page`)
 and lives only while that page is open: when its stream closes (the tab is
 closed, the page reloads), the dialog ends, as when the last stream of all
@@ -24,6 +30,7 @@ FRAME = 0.05  # seconds between snapshots while a dialog is on
 IDLE = 0.5  # seconds between looks while none is: a snapshot goes only when it changes
 KEEPALIVE = 15  # seconds: a comment on a quiet stream, so a closed page is noticed
 KEEPALIVE_IN_DIALOG = 1  # seconds, in a dialog: a Private one must not outlive its page
+DICTATED = 5  # of a dictation's latest phrases in each snapshot
 
 
 class Dialog:
@@ -44,7 +51,29 @@ class Dialog:
             "wake": v.words["wake"],
             "text": v.showing(),
             "voices": v.speakers.voices.shown() if v.speakers and v.private else [],
+            "dictation": self.dictated(),
         }
+
+    def dictated(self) -> dict | None:
+        """The latest dictation, for its page: whether it is on, and its phrases."""
+        d = self.voice.dictation
+        if d is None:
+            return None
+        phrases = list(d["phrases"])
+        return {
+            "page": d["page"],
+            "n": d["n"],
+            "on": d["on"],
+            "count": len(phrases),
+            "phrases": phrases[-DICTATED:],
+        }
+
+    def dictate(self, page: str | None) -> None:
+        """From the server's thread: a dictation begins for `page`, or ends (None).
+        ValueError when a dialog is on: it hears the owner already."""
+        if page and self.voice.dialog:
+            raise ValueError("a dialog is on: end it to dictate")
+        self.voice.loop.call_soon_threadsafe(self.voice.set_dictation, page)
 
     def name_voice(self, voice_id: int, name: str) -> None:
         """From the server's thread; ValueError says what is wrong."""
@@ -60,8 +89,8 @@ class Dialog:
 
     @contextlib.contextmanager
     def watching(self, page: str | None = None):
-        """One page's stream: closed, it ends the dialog that page began, or any
-        dialog when it was the last one."""
+        """One page's stream: closed, it ends the dialog that page began and its
+        dictation, or any when it was the last one."""
         with self._lock:
             self.watchers += 1
         try:
@@ -70,5 +99,9 @@ class Dialog:
             with self._lock:
                 self.watchers -= 1
                 ends = not self.watchers or (page is not None and page == self.owner)
+                d = self.voice.dictation
+                dictated = d is not None and d["on"] and (not self.watchers or page == d["page"])
             if ends:
                 self.set(None)
+            if dictated:
+                self.dictate(None)

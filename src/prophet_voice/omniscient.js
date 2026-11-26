@@ -1,6 +1,9 @@
-// The voice's part of Omniscient, through the plugin API only (Omniscient's own page is
-// never changed): a page of the dialog and a page of the settings, under Plugins in the
-// menu, and a Private button by the message field.
+// The voice's part of Omniscient, through the plugin API (Omniscient's own page is never
+// changed): a page of the dialog and a page of the settings, under Plugins in the menu,
+// and a Private button by the message field. One thing is the voice's own, outside that
+// API: a microphone button it draws over the text field where the cursor is, to dictate
+// into it (below, "dictation"). The button is the script's own element, and the text goes
+// into the field as typing would put it.
 //
 // The dialog's page is a cloud of points: it breathes while waiting, turns faster while
 // Prophet thinks, and widens with the owner's voice and with Prophet's; beside it, what
@@ -242,6 +245,151 @@ function drawSettings(prophet, body, values, saved) {
   return { fill: () => { if (me) fill(); } };
 }
 
+// ---- dictation: a microphone by the text field where the cursor is ---------------------
+// A small round button of the script's own floats at the right edge of the text field
+// that has the cursor: any textarea, text input or editable text of Omniscient, but a
+// password. Pressed, it has the voice open the Mac's microphone (POST /dictation), and
+// each phrase the owner says comes back in the voice's stream once Whisper has heard it
+// and is typed where the cursor is, as the keyboard would. Under the field, the phrase as
+// far as it is heard. The button again or Esc ends it; so does a minute with nothing
+// said, the field going away, or this page closing. Nothing goes to the chat.
+const DICTATE_STYLE = `
+.pv-mic,.pv-heard{position:fixed;left:0;top:0;z-index:2147483000;display:none}
+.pv-mic{align-items:center;justify-content:center;width:1.625rem;height:1.625rem;padding:0;border-radius:9999px;border:1px solid rgb(212 212 216);background:#fff;color:rgb(82 82 91);box-shadow:0 1px 2px rgb(0 0 0/.08);opacity:.7;cursor:pointer;transition:opacity .15s,background-color .15s,color .15s}
+.pv-mic:hover,.pv-mic[aria-pressed="true"]{opacity:1}
+.dark .pv-mic{border-color:rgb(63 63 70);background:rgb(39 39 42);color:rgb(212 212 216)}
+.pv-mic[aria-pressed="true"],.dark .pv-mic[aria-pressed="true"]{border-color:#059669;background:#059669;color:#fff}
+.pv-mic svg{width:.875rem;height:.875rem}
+.pv-heard{box-sizing:border-box;padding:.25rem .625rem;border-radius:.5rem;background:rgb(24 24 27/.92);color:#fff;font-size:.8125rem;line-height:1.25rem;white-space:pre-wrap;pointer-events:none;box-shadow:0 2px 8px rgb(0 0 0/.15)}
+.dark .pv-heard{background:rgb(244 244 245/.95);color:rgb(24 24 27)}`;
+const MIC = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>`;
+const DICTATED_INTO = new Set(["text", "search"]);  // inputs of these types, and textareas
+const NARROW = 96;  // px: a field narrower than this has no room for the button
+const QUIET_END = 60000;  // ms with nothing said that end a dictation
+
+function dictatable(el) {
+  if (!(el instanceof HTMLElement) || el.closest(".pv-own")) return false;
+  if (el instanceof HTMLTextAreaElement) return !el.readOnly && !el.disabled;
+  if (el instanceof HTMLInputElement) return DICTATED_INTO.has(el.type) && !el.readOnly && !el.disabled;
+  return el.isContentEditable;
+}
+
+// The text goes where the cursor is, after a space when it follows a word. As typing:
+// the field's own listeners hear it, and the browser's undo takes it back.
+function typeInto(el, text) {
+  if (!el?.isConnected || !text) return;
+  if (el.isContentEditable) {
+    if (document.activeElement !== el) el.focus();
+    const had = el.textContent;
+    document.execCommand("insertText", false, (had && !/\s$/.test(had) ? " " : "") + text);
+    return;
+  }
+  const value = el.value, from = el.selectionStart ?? value.length, to = el.selectionEnd ?? from;
+  const before = value.slice(0, from);
+  let add = (before && !/\s$/.test(before) ? " " : "") + text;
+  if (el.maxLength > 0) add = add.slice(0, Math.max(0, el.maxLength - value.length + (to - from)));
+  if (!add) return;
+  if (document.activeElement === el && document.execCommand("insertText", false, add)) return;
+  el.setRangeText(add, from, to, "end");
+  el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: add }));
+}
+
+function dictation(prophet, voiceAt, page) {
+  const root = document.createElement("div"); root.className = "pv-own";
+  const style = document.createElement("style"); style.textContent = DICTATE_STYLE;
+  const button = document.createElement("button"); button.type = "button"; button.className = "pv-mic"; button.tabIndex = -1;
+  button.innerHTML = MIC; button.setAttribute("aria-pressed", "false");
+  const note = document.createElement("div"); note.className = "pv-heard"; note.setAttribute("aria-live", "polite");
+  root.append(style, button, note);
+  document.body.append(root);
+
+  let voice = null;     // the voice's latest snapshot; null while it does not answer
+  let target = null;    // the field the button is by: the one that last had the cursor
+  let on = false;       // this page dictates
+  let asked = 0;        // when this page last began or ended it (performance.now)
+  let serial = 0, have = 0;  // the voice's dictation and how many of its phrases are typed
+  let lastHeard = 0;    // when something was last said
+  let problem = "", problemUntil = 0, raf = 0;
+
+  const mine = () => (voice?.dictation?.page === page ? voice.dictation : null);
+  // After it ends, its last phrase is still Whisper's for a moment.
+  const pending = () => !on && !!mine() && voice.state === "hearing";
+  function rect() {
+    if (!target?.isConnected) return null;
+    const r = target.getBoundingClientRect();
+    return r.width >= NARROW && r.height > 0 && r.bottom > 0 && r.top < innerHeight ? r : null;
+  }
+  function frame() {
+    raf = 0;
+    const r = rect(), now = performance.now();
+    if (on && !r) tell(false);  // the field has gone: nothing to dictate into
+    if (now > problemUntil) problem = "";
+    const usable = !!voice && !voice.dialog && !!r;
+    const showButton = usable && (on || document.activeElement === target);
+    const text = problem || (!usable ? "" : on ? voice.text || (voice.state === "hearing" ? "Processing voice…" : "Speak…")
+      : pending() ? "Processing voice…" : "");
+    button.style.display = showButton ? "flex" : "none";
+    note.style.display = text && r ? "block" : "none";
+    if (!showButton && !(text && r)) return;  // woken again by the cursor or the voice
+    if (showButton) {
+      const size = button.offsetWidth, x = r.left + target.clientLeft + target.clientWidth - size - 4;
+      const y = r.height < size * 2 ? r.top + (r.height - size) / 2 : r.top + 4;
+      button.style.transform = `translate(${Math.round(x)}px,${Math.round(y)}px)`;
+      const pressed = String(on), title = on ? "Stop dictating (Esc)" : "Dictate into this field";
+      if (button.getAttribute("aria-pressed") !== pressed) button.setAttribute("aria-pressed", pressed);
+      if (button.title !== title) { button.title = title; button.setAttribute("aria-label", title); }
+      button.style.boxShadow = on ? `0 0 0 ${Math.round(Math.min(1, voice.mic || 0) * 6)}px rgb(5 150 105/.3)` : "";
+    }
+    if (text && r) {
+      if (note.textContent !== text) note.textContent = text;
+      note.style.maxWidth = `${Math.round(Math.max(r.width, 200))}px`;
+      note.style.transform = `translate(${Math.round(r.left)}px,${Math.round(r.bottom + 4)}px)`;
+    }
+    raf = requestAnimationFrame(frame);
+  }
+  const wake = () => { if (!raf) raf = requestAnimationFrame(frame); };
+
+  async function tell(want) {
+    asked = lastHeard = performance.now(); on = want; wake();
+    try {
+      const r = await fetch(`${voiceAt}/dictation`, { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ on: want, page }) });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+    } catch (err) {
+      if (want) on = false;
+      problem = `Voice: ${err.message}`; problemUntil = performance.now() + 5000; wake();
+    }
+  }
+  button.addEventListener("mousedown", (e) => e.preventDefault());  // the cursor stays in the field
+  button.addEventListener("click", () => { if (voice && target) tell(!on); });
+  document.addEventListener("focusin", (e) => { if (dictatable(e.target)) { target = e.target; wake(); } });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && on) tell(false); });
+  addEventListener("pagehide", () => { if (on) navigator.sendBeacon(`${voiceAt}/dialog/end`); });
+  if (dictatable(document.activeElement)) target = document.activeElement;
+
+  // Each snapshot of the voice's stream (null: it does not answer).
+  function follow(snapshot) {
+    voice = snapshot;
+    const now = performance.now(), d = mine();
+    if (!voice) { on = false; return; }
+    if (d) {
+      if (d.n !== serial) { serial = d.n; have = 0; }
+      if (d.count > have) {
+        const fresh = d.phrases.slice(-(d.count - have));
+        have = d.count; lastHeard = now;
+        for (const text of fresh) { try { typeInto(target, text); } catch (err) { console.error("voice: dictation", err); } }
+      }
+    }
+    if (now - asked > SETTLE * 1000) on = !!d?.on;  // ended elsewhere: a dialog began, the voice restarted
+    if (on) {
+      if (voice.state === "listening" || voice.state === "hearing") lastHeard = now;
+      else if (now - lastHeard > QUIET_END) tell(false);
+    }
+    if (on || d || document.activeElement === target) wake();
+  }
+  return { heard: follow };
+}
+
 export function activate(prophet) {
   try { settingsPage(prophet); } catch (err) { console.error("voice: the settings page", err); }
   try { dialogPage(prophet); } catch (err) { console.error("voice: the dialog", err); }
@@ -253,6 +401,8 @@ function dialogPage(prophet) {
   const make = (tag, cls, attrs = {}, ...kids) => { const n = document.createElement(tag); if (cls) n.className = cls; for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v); n.append(...kids); return n; };
   const dark = () => prophet.context().dark;
   const TAB = `plugin:${prophet.plugin.name}:dialog`;
+  let fields = { heard() {} };  // the dictation into Omniscient's fields follows the same stream
+  try { fields = dictation(prophet, voiceAt, page); } catch (err) { console.error("voice: dictation", err); }
 
   // ---- the dialog's page and the button by the message field --------------------------
   const style = make("style"); style.textContent = STYLE;
@@ -339,6 +489,7 @@ function dialogPage(prophet) {
     const source = new EventSource(`${voiceAt}/dialog/events?page=${page}`);
     source.onmessage = (e) => heard(JSON.parse(e.data));
     source.onerror = () => {
+      fields.heard(null);
       live = null; end(false); setButtons(); drawVoices([]); nowText.textContent = ""; now.hidden = true;
       if (source.readyState === EventSource.CLOSED) setTimeout(follow, 5000);  // else it tries again by itself
     };
@@ -371,6 +522,7 @@ function dialogPage(prophet) {
   }
   function heard(snapshot) {
     live = snapshot;
+    fields.heard(snapshot);
     drawVoices(live.voices);
     const text = dialog ? live.text || "" : "";
     if (nowText.textContent !== text) { nowText.textContent = text; now.hidden = !text; }

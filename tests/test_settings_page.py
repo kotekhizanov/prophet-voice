@@ -202,6 +202,11 @@ class FakeDialog:
         self.set_to.append((kind, project))
         self.page = page
 
+    def dictate(self, page):
+        if page == "in-a-dialog":
+            raise ValueError("a dialog is on: end it to dictate")
+        self.dictating = page
+
     def name_voice(self, voice_id, name):
         if voice_id != 1:
             raise ValueError("no such voice in this dialog")
@@ -320,3 +325,23 @@ def test_omniscient_lists_renames_and_forgets_the_named_voices(page):
     assert change("http://evil.com", id=voice_id, forget=True).status_code == 403
     assert change(id=voice_id, forget=True).json()["voices"] == []
     assert Voices().listed() == []
+
+
+def test_omniscient_begins_and_ends_a_dictation(page, voice):
+    def dictate(origin=OMNISCIENT, **body):
+        return page.post("/dictation", json=body, headers={"Origin": origin})
+
+    assert dictate(on=True, page="a1b2c3d4-e5f6").status_code == 200
+    assert voice.dictating == "a1b2c3d4-e5f6"
+    assert dictate(on=False).status_code == 200
+    assert voice.dictating is None
+    assert dictate(on=True, page="in-a-dialog").status_code == 409
+    assert dictate(on=True).status_code == 422
+    assert dictate(on="yes", page="a1b2c3d4-e5f6").status_code == 422
+    assert dictate("http://evil.com", on=True, page="a1b2c3d4-e5f6").status_code == 403
+
+
+def test_without_the_voice_running_there_is_no_dictation(page):
+    body = {"on": True, "page": "a1b2c3d4"}
+    r = page.post("/dictation", json=body, headers={"Origin": OMNISCIENT})
+    assert r.status_code == 409

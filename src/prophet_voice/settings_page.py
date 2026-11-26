@@ -10,8 +10,9 @@ core's address in the settings may read the plugin (CORS) and talk to it: a
 key from elsewhere would send what the owner says to another core.
 
 The plugin's script, `/omniscient.js`, is the dialog in Omniscient's chat
-(dialog.py: `POST /dialog`, `GET /dialog/events`) and the voice's settings
-page there. The manifest's `settings` are the core's (config.PLUGIN_SETTINGS);
+(dialog.py: `POST /dialog`, `GET /dialog/events`), the dictation into its
+fields (`POST /dictation`) and the voice's settings page there. The
+manifest's `settings` are the core's (config.PLUGIN_SETTINGS);
 this Mac's own (MAC: the microphone, the Groq key, the words) the voice keeps
 in settings.json, and the page reads and sets them here (`/api/settings`),
 tries the voice (`/api/say`) and asks whether the core knows the key
@@ -54,6 +55,7 @@ PLUGIN = (
     "/dialog/end",
     "/dialog/events",
     "/dialog/voice",
+    "/dictation",
     "/api/settings",
     "/api/voices",
     "/api/check",
@@ -214,6 +216,8 @@ class Page(BaseHTTPRequestHandler):
             return self._end_dialog()
         if self.path == "/dialog/voice":
             return self._name_voice()
+        if self.path == "/dictation":
+            return self._dictate()
         if self.path not in ("/api/settings", "/api/check", "/api/say", "/api/voices"):
             return self._json(404, {"error": "no such page"})
         if self._omniscient("the settings") is None:
@@ -329,13 +333,36 @@ class Page(BaseHTTPRequestHandler):
             return self._json(422, {"error": str(exc)})
         self._json(200, {"ok": True})
 
+    def _dictate(self) -> None:
+        """{"on": whether the owner dictates into a field now, "page": the page's name}."""
+        if self._omniscient("a dictation") is None:
+            return
+        body = self._body()
+        if body is None:
+            return
+        if Page.dialog is None:
+            return self._json(409, {"error": NOT_RUNNING})
+        on = body.get("on") if isinstance(body, dict) else None
+        page = body.get("page") if isinstance(body, dict) else None
+        if not isinstance(on, bool):
+            return self._json(422, {"error": "a dictation is on or not"})
+        if on and not (isinstance(page, str) and PAGE.match(page)):
+            return self._json(422, {"error": "a page names itself in letters, digits and -"})
+        try:
+            Page.dialog.dictate(page if on else None)
+        except ValueError as exc:
+            return self._json(409, {"error": str(exc)})
+        self._json(200, {"on": on})
+
     def _end_dialog(self) -> None:
-        """A leaving page's beacon (no JSON: a beacon cannot ask first). It only ends."""
+        """A leaving page's beacon (no JSON: a beacon cannot ask first). It only ends:
+        the dialog, and a dictation."""
         if self._omniscient("an end of the dialog") is None:
             return
         self.rfile.read(min(int(self.headers.get("Content-Length") or 0), MAX_BODY))
         if Page.dialog is not None:
             Page.dialog.set(None)
+            Page.dialog.dictate(None)
         self._json(200, {"dialog": None})
 
     def _events(self, page: str | None) -> None:
@@ -353,18 +380,19 @@ class Page(BaseHTTPRequestHandler):
             with Page.dialog.watching(page):
                 while True:
                     now = Page.dialog.snapshot()
+                    open_ = now["dialog"] or (now.get("dictation") or {}).get("on")
                     if now != last:
                         self.wfile.write(
                             f"data: {json.dumps(now, ensure_ascii=False)}\n\n".encode()
                         )
                         last, sent = now, time.monotonic()
                     elif time.monotonic() - sent > (
-                        dialog.KEEPALIVE_IN_DIALOG if now["dialog"] else dialog.KEEPALIVE
+                        dialog.KEEPALIVE_IN_DIALOG if open_ else dialog.KEEPALIVE
                     ):
                         self.wfile.write(b": still here\n\n")
                         sent = time.monotonic()
                     self.wfile.flush()
-                    time.sleep(dialog.FRAME if now["dialog"] else dialog.IDLE)
+                    time.sleep(dialog.FRAME if open_ else dialog.IDLE)
         except OSError:  # the page has gone
             pass
 

@@ -1,9 +1,9 @@
 {
   "id": "voice",
   "name": "Voice",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "api_version": 1,
-  "description": "Talk to Prophet aloud: say «Пророк» and your question.",
+  "description": "Talk to Prophet aloud in a Private dialog, and dictate into any text field.",
   "homepage": "https://github.com/kotekhizanov/prophet-voice",
   "scopes": [
     "chat"

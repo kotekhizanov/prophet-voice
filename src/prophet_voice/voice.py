@@ -41,6 +41,16 @@ setting, by the "diarizer" one): once more than one has been heard, each
 line of the question says whose it is, «Аня: …». A phrase two people said
 is cut into their turns, and each turn goes to Whisper on its own.
 
+Dictation: by a text field of Omniscient the plugin's script shows a
+microphone button, and while it is pressed the owner's speech becomes text
+in that field. The microphone opens as for a Private dialog, with no wake
+word, but nothing goes to the chat and nothing is said aloud: each phrase,
+once Whisper has heard it, is the page's to put where the cursor is
+(`dictation`, which the page reads in the voice's stream). Ending it ends
+the phrase being said at once, and that phrase still comes. A dictation and
+a dialog are never on together: a dialog that begins ends the dictation, and
+none begins in a dialog.
+
 Only one voice runs on this machine: a second `run` refuses to start, or two
 would hear the same phrase and answer it together.
 
@@ -111,6 +121,9 @@ class Voice:
         # the parts of the phrase being said: (Vosk's words up to its end, Whisper's text)
         self.parts: list[tuple[int, concurrent.futures.Future]] = []
         self.pool = concurrent.futures.ThreadPoolExecutor(1, "parts")  # one after another
+        # the dictation into a field of Omniscient, the latest: {"page", "n", "on", "phrases"}
+        self.dictation: dict | None = None
+        self.dictations = 0  # how many there have been: each has its number
 
     @property
     def private(self) -> bool:
@@ -131,8 +144,45 @@ class Voice:
             return "thinking"
         return "waiting"
 
+    @property
+    def dictating(self) -> bool:
+        return self.dictation is not None and self.dictation["on"]
+
+    def set_dictation(self, page: str | None) -> None:
+        """A dictation begins for a page of Omniscient, or ends (None), on the loop.
+        The phrase being said as it ends is finished at once, and still comes."""
+        if page:
+            if self.dialog or (self.dictating and self.dictation["page"] == page):
+                return
+            if self.dictation is not None and self.dictation["page"] == page:
+                self.dictation["on"] = True  # the page's own goes on: a late phrase still comes
+            else:
+                self.dictations += 1
+                self.dictation = {"page": page, "n": self.dictations, "on": True, "phrases": []}
+            self.configure(config.with_plugin(config.load(), self.from_omniscient)[0])
+            self.mouth.hush()  # what Prophet reads would be heard as the owner's
+            if self.ears is not None:
+                self.ears.finish(False)
+                self.ears.be_alone(True)
+            self.microphone.set()
+            if self.loop is not None and self.loop.is_running():
+                self.beginning = self.loop.create_task(self.refresh())
+        elif self.dictating:
+            self.dictation["on"] = False
+            if self.ears is not None:
+                self.ears.finish()
+                self.ears.be_alone(False)
+            self.microphone.clear()
+
     def set_dialog(self, dialog: str | None, project=None) -> None:
         """A dialog begins, ends, changes its kind or its chat (on the loop)."""
+        if dialog and self.dictation is not None:  # what was being dictated is dropped
+            if self.dictating and self.ears is not None:
+                self.ears.finish(False)
+                self.ears.be_alone(False)
+            if self.dictating and dialog != "private":
+                self.microphone.clear()
+            self.dictation = None
         was, self.dialog = self.dialog, dialog
         self.dialog_project = project if dialog else None
         if self.ears is not None and (was == "private") != self.private:
@@ -208,6 +258,8 @@ class Voice:
         self.mouth.tone(False)
 
     def on_begun(self) -> None:
+        if self.dictating:  # the page shows it; nothing is said aloud
+            return
         self.mouth.cue(words.pick(self.words["begun"]), CUE_VOLUME["begun"])
 
     def on_stop(self) -> None:
@@ -230,14 +282,16 @@ class Voice:
         if self.private and not over:
             self.mouth.cue(words.pick(self.words["heard"]), CUE_VOLUME["heard"])
         parts, self.parts = self.parts, []
+        dictation = None if self.dialog else self.dictation  # whose phrase it is
         self.loop.call_soon_threadsafe(
-            self.phrases.put_nowait, (audio, free, self.era, over, parts)
+            self.phrases.put_nowait, (audio, free, self.era, over, parts, dictation)
         )
 
     def showing(self) -> str:
         """The phrase being said or sent, for Omniscient's page (from its thread)."""
         ears = self.ears
-        if self.private and ears is not None and ears.state == "phrase" and not ears.tentative:
+        hears = self.private or self.dictating
+        if hears and ears is not None and ears.state == "phrase" and not ears.tentative:
             texts, upto = [], 0
             for words_upto, heard in self.parts:  # those Whisper has heard, in order
                 if not heard.done() or heard.exception() is not None:
@@ -261,9 +315,9 @@ class Voice:
     async def serve(self) -> None:
         self.loop = asyncio.get_running_loop()
         while True:
-            audio, free, era, over, parts = await self.phrases.get()
+            audio, free, era, over, parts, dictation = await self.phrases.get()
             try:
-                await self.handle(audio, free, era, over, parts)
+                await self.handle(audio, free, era, over, parts, dictation)
             except CoreError as exc:
                 log.error("the core refused: %s", exc)
                 self.mouth.say(SAY_FAILED)
@@ -272,17 +326,27 @@ class Voice:
                 self.mouth.say(SAY_FAILED)
 
     async def handle(
-        self, audio: bytes, free: bool, era: int | None = None, over: bool = False, parts=()
+        self,
+        audio: bytes,
+        free: bool,
+        era: int | None = None,
+        over: bool = False,
+        parts=(),
+        dictation: dict | None = None,
     ) -> None:
         """A phrase heard in `era`: none of a dialog that has ended since. `over`:
         it was said over Prophet's voice. `parts`: those of it given to Whisper
-        while it was said."""
+        while it was said. `dictation`: the one it was dictated in, whose text it
+        is, and not a question."""
         era = self.era if era is None else era
         if era != self.era:
             return
         self.hearing_now += 1
         try:
-            await self._handle(audio, free, era, over, parts)
+            if dictation is not None:
+                await self._dictated(audio, parts, dictation)
+            else:
+                await self._handle(audio, free, era, over, parts)
         finally:
             self.hearing_now -= 1
             if not self.hearing_now:
@@ -338,6 +402,14 @@ class Voice:
         if not self.private:
             self.mouth.say(words.pick(self.words["ack"]))
         self.follow(run_id)
+
+    async def _dictated(self, audio: bytes, parts, dictation: dict) -> None:
+        """A dictated phrase: its text is the page's, for the field. It is not
+        written to the log: it may be anything the owner types."""
+        text = words.alone(await asyncio.to_thread(self._whole, audio, parts), self.words)
+        log.info("dictated %s characters", len(text))
+        if text and self.dictation is dictation:  # not one a dialog has dropped since
+            dictation["phrases"].append(text)
 
     async def _cancel(self) -> None:
         """The answer being prepared is cancelled in the core."""
@@ -612,7 +684,8 @@ async def _run(settings: dict, models) -> None:
         daemon=True,
     ).start()
     settings_page.Page.dialog = Dialog(voice)  # Omniscient's dialog talks to it
-    print("Ready. Begin a Private dialog in Omniscient's chat to talk; Ctrl+C ends.")
+    print("Ready. Begin a Private dialog in Omniscient's chat to talk, or dictate")
+    print("into a field there; Ctrl+C ends.")
     try:
         await serving
     finally:

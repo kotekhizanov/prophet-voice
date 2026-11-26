@@ -7,9 +7,16 @@ class Voice:
     def __init__(self):
         self.loop = asyncio.new_event_loop()
         self.set_to = []
+        self.dialog = None
+        self.dictation = None
+        self.dictated = []
 
     def set_dialog(self, kind, project=None):
         self.set_to.append((kind, project))
+
+    def set_dictation(self, page):
+        self.dictated.append(page)
+        self.dictation = {"page": page, "n": 1, "on": True, "phrases": []} if page else None
 
 
 def test_the_last_page_to_go_ends_the_dialog():
@@ -52,6 +59,7 @@ def test_a_private_dialog_shows_its_voices(home):
         state=lambda: "waiting",
         showing=lambda: "Какая погода",
         speakers=Speakers(None, None, Voices(home / "voices.json")),
+        dictation=None,
     )
     d = Dialog(voice)
     voice.speakers.voices.who([1.0, 0.0])
@@ -60,3 +68,31 @@ def test_a_private_dialog_shows_its_voices(home):
     assert d.snapshot()["text"] == "Какая погода"  # the phrase being said, so far
     voice.private, voice.dialog = False, "casual"
     assert d.snapshot()["voices"] == []
+
+
+def test_a_dictation_ends_with_its_page_and_is_not_begun_in_a_dialog():
+    import pytest
+
+    voice = Voice()
+    d = Dialog(voice)
+    with d.watching("other"):
+        with d.watching("mine"):
+            d.dictate("mine")
+            voice.loop.run_until_complete(asyncio.sleep(0))
+        voice.loop.run_until_complete(asyncio.sleep(0))
+        assert voice.dictated == ["mine", None]  # another page still open
+        voice.dialog = "private"
+        with pytest.raises(ValueError):
+            d.dictate("other")
+    voice.loop.close()
+
+
+def test_a_dictation_shows_its_latest_phrases():
+    voice = Voice()
+    d = Dialog(voice)
+    assert d.dictated() is None
+    voice.dictation = {"page": "mine", "n": 2, "on": True, "phrases": [str(i) for i in range(8)]}
+    assert d.dictated() == {
+        "page": "mine", "n": 2, "on": True, "count": 8, "phrases": ["3", "4", "5", "6", "7"]
+    }  # fmt: skip
+    voice.loop.close()

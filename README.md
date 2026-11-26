@@ -2,6 +2,7 @@
 
 Talk to [Prophet](https://github.com/kotekhizanov/prophet_v2) aloud. Begin a
 Private dialog in Omniscient's chat and speak; Prophet answers in its voice.
+Or dictate into any text field of Omniscient with the microphone button by it.
 
 prophet-voice is a Prophet plugin: it lives in its own repository, is added
 in Omniscient's Settings → Plugins, gets its client key from there and talks
@@ -15,8 +16,9 @@ secrets and this Mac's own (below).
 
 Everything runs on this machine (a Mac with a microphone and speakers):
 
-- The microphone is open only in a Private dialog (below): it opens when
-  you begin one in Omniscient's chat and closes when you end it. Its audio
+- The microphone is open only in a Private dialog or a dictation (both
+  below): it opens when you begin one in Omniscient and closes when you end
+  it. Its audio
   goes through a noise suppressor first: the room's steady noise (a fan,
   the street's hum) is lowered by about 12 dB, band by band, and a voice
   passes.
@@ -211,6 +213,27 @@ answer that comes after (the answer is still in the chat). A dialog belongs
 to the page that began it: closing or reloading that page ends it, so the
 microphone is never open with no page to show it. The cue words are in the
 settings (Listening, Heard).
+
+## Dictation into a field
+
+While the voice runs, the text field that has the cursor in Omniscient (the
+message field, a goal, a task, notes: any textarea or text input, but a
+password) shows a small round microphone at its right edge. Press it and
+speak: the Mac's microphone opens, the phrase shows under the field as far
+as it is heard, and at each pause its text, as Whisper has it, is typed
+where the cursor is. You may go on typing meanwhile, or move the cursor to
+another field: the text follows it.
+
+The button again or Esc ends it, and the phrase you were saying still
+comes. It also ends after a minute with nothing said, when the field goes
+away and when the page closes. Nothing is sent to the chat and nothing is
+said aloud; a dictated phrase is not written to the voice's log. There is
+no dictation during a dialog (the dialog hears you already), and a dialog
+that begins ends it.
+
+This button is the one thing the script adds outside Omniscient's plugin
+API: an element of its own over the page, and the text typed into the field
+as the keyboard would.
 
 ### Who said what
 

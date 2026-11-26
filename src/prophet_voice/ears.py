@@ -40,8 +40,12 @@ Whether someone speaks is the loudness above VOICE_FROM against the room's
 quiet: a bus's rumble and a room's hum stay mostly below it, a voice does not.
 `level` is that loudness for Omniscient's picture, 0 to 1.
 
+`finish` ends the phrase being said at once, with no pause waited for: the
+owner ended a dictation, and what they were saying still counts.
+
 The microphone is open only while it is asked to be (`listen`'s `on`: a
-Private dialog). Its audio comes first through `echo` (echo.py), which takes
+Private dialog, or a dictation into a field of Omniscient). Its audio comes
+first through `echo` (echo.py), which takes
 out Prophet's own voice as the speakers play it, and then through the
 denoiser (denoise.py), which takes out the room's steady noise, before
 anything hears it.
@@ -138,6 +142,7 @@ class Ears:
         self.was_speaking = False
         self.deaf_until = 0.0
         self._free = None  # listen_free's request, taken by the next block
+        self._finish = False  # finish's request, taken by the next block or the closing
         self.alone = False  # a Private dialog: no wake word
         self.onset = 0.0  # seconds of voice so far, when alone
         self.tentative = False  # a phrase begun alone, with no word heard in it yet
@@ -161,8 +166,23 @@ class Ears:
         before does not count."""
         self.alone, self.onset, self.waiting_since = on, 0.0, self.clock
 
+    def finish(self, on: bool = True) -> None:
+        """End the phrase being said now, as if its pause had come (from another
+        thread): at the next block, or as the microphone closes. `on` False
+        takes the request back."""
+        self._finish = on
+
+    def _finished(self) -> None:
+        if not self._finish:
+            return
+        self._finish = False
+        if self.state == "phrase" and not self.tentative and self.voiced > 0.25:
+            self._send()
+
     def reset(self) -> None:
-        """The microphone has closed (from the ears' thread): what was heard is gone."""
+        """The microphone has closed (from the ears' thread): what was heard is gone,
+        but a phrase it was asked to finish."""
+        self._finished()
         self._wait()
         self.recent.clear()
         self._free, self.level = None, 0.0
@@ -178,6 +198,7 @@ class Ears:
     def hear(self, block: bytes) -> None:
         seconds, at = len(block) / 2 / RATE, self.clock
         self.clock += seconds
+        self._finished()
         if self.mouth.speaking and (self.state == "waiting" or self.over):
             self._stops(block)
         else:

@@ -528,3 +528,39 @@ def test_the_microphones_blocks_come_through_the_echo(monkeypatch):
     t.join(3)
     assert heard.blocks == 3 and len(took) == 3
     assert all(before <= at <= time.monotonic() for at in took)  # when each block ended
+
+
+def test_a_phrase_asked_to_finish_ends_with_no_pause():
+    # A dictation ends while the owner speaks: what was said so far is the phrase.
+    e = Ears_({"whole": {30: [word("какая", 0.2, 0.6)]}})
+    e.ears.be_alone(True)
+    e.feed(quiet(), 25)
+    e.feed(loud(), 29)
+    assert e.events == [("begun",)]
+    e.ears.finish()
+    e.feed(loud(), 1)
+    assert e.events[1][0] == "phrase" and e.ears.state == "waiting"
+
+
+def test_a_phrase_asked_to_finish_ends_as_the_microphone_closes():
+    e = Ears_({"whole": {30: [word("какая", 0.2, 0.6)]}})
+    e.ears.be_alone(True)
+    e.feed(quiet(), 25)
+    e.feed(loud(), 29)
+    e.ears.finish()
+    e.ears.reset()
+    assert [name for name, *_ in e.events] == ["begun", "phrase"]
+    e.feed(loud(), 9)
+    e.ears.reset()  # not asked to: what was heard is gone
+    assert [name for name, *_ in e.events] == ["begun", "phrase"]
+
+
+def test_a_sound_with_no_word_is_not_finished_into_a_phrase():
+    e = Ears_({})
+    e.ears.be_alone(True)
+    e.feed(quiet(), 25)
+    e.feed(loud(), 12)
+    assert e.ears.tentative
+    e.ears.finish()
+    e.ears.reset()
+    assert e.events == []

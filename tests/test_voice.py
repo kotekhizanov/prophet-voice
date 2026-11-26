@@ -106,6 +106,9 @@ class Ears:
     def be_alone(self, on):
         self.alone = on
 
+    def finish(self, on=True):
+        self.finishing = on
+
 
 def make(core, *texts, project=""):
     settings = {**config.load(), "project": project}
@@ -767,3 +770,70 @@ def test_a_dropped_phrase_leaves_no_parts():
     v.on_part(SECOND, 1)
     v.on_part(None, 0)
     assert v.parts == []
+
+
+def test_a_dictated_phrase_is_the_pages_and_not_the_chats():
+    core = Core()
+    v = make(core, "Найди, почему упали заказы.", "И пришли отчёт.")
+
+    async def go():
+        v.loop = asyncio.get_running_loop()
+        v.set_dictation("page-one-1")
+        assert v.microphone.is_set() and v.ears.alone and v.dictating
+        v.on_begun()  # no «Ага?»: nothing is said aloud
+        v.on_phrase(b"", True)
+        await v.handle(*await v.phrases.get())
+        v.set_dictation(None)  # the phrase being said is finished, and still comes
+        assert not v.microphone.is_set() and v.ears.finishing and not v.dictating
+        v.on_phrase(b"", True)
+        await v.handle(*await v.phrases.get())
+        await settle(v)
+
+    asyncio.run(go())
+    assert v.dictation["phrases"] == ["Найди, почему упали заказы.", "И пришли отчёт."]
+    assert core.calls == [] and v.mouth.said == ["hush"]
+
+
+def test_a_dictation_is_shown_as_it_is_said():
+    v = make(Core())
+    v.set_dictation("page-one-1")
+    v.ears.state, v.ears.text = "phrase", "найди почему"
+    assert v.showing() == "найди почему"
+
+
+def test_no_dictation_in_a_dialog_and_a_dialog_ends_one():
+    v = make(Core(), "Что нового?")
+
+    async def go():
+        v.loop = asyncio.get_running_loop()
+        v.set_dialog("private")
+        v.set_dictation("page-one-1")
+        assert v.dictation is None
+        v.set_dialog(None)
+        v.set_dictation("page-one-1")
+        assert v.dictating
+        v.set_dialog("casual")  # a Casual dialog has no microphone
+        assert v.dictation is None and not v.microphone.is_set() and not v.ears.alone
+        v.set_dialog(None)
+        v.set_dictation("page-one-1")
+        was = v.dictation
+        v.on_phrase(b"", True)
+        v.set_dialog("private")  # what was being dictated is dropped
+        await v.handle(*await v.phrases.get())
+        assert was["phrases"] == [] and v.microphone.is_set() and v.ears.alone
+        if v.beginning is not None:
+            await v.beginning
+
+    asyncio.run(go())
+
+
+def test_a_page_dictates_again_into_the_same_dictation():
+    v = make(Core())
+    v.set_dictation("page-one-1")
+    first = v.dictation
+    v.set_dictation(None)
+    v.set_dictation("page-one-1")
+    assert v.dictation is first and first["on"]  # a late phrase of it still comes
+    v.set_dictation(None)
+    v.set_dictation("page-two-2")
+    assert v.dictation is not first and v.dictation["n"] == first["n"] + 1

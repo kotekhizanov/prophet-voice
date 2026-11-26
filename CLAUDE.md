@@ -18,11 +18,17 @@ serves the plugin and waits for one.
    it do. Its script in Omniscient (`omniscient.js`) uses only the plugin
    API (`prophet.*`): its pages, the button by the message field, and with
    `prophet.api` its settings and the chat's messages. It never changes
-   Omniscient's own page, and talks to the voice on this machine.
-2. **The microphone is open only in a Private dialog** the owner begins in
-   Omniscient, and closes when it ends or its page closes. In it, any speech
-   in which Vosk hears a word goes to Whisper (and to Groq only when the
-   owner chose it); nothing else leaves the ears.
+   Omniscient's own page, and talks to the voice on this machine. The one
+   thing outside that API is the dictation button (the owner's choice,
+   2026-11-26): an element of the script's own, drawn over the text field
+   where the cursor is, and the dictated text typed into that field as the
+   keyboard would. Nothing else of Omniscient's page is touched.
+2. **The microphone is open only in a Private dialog or a dictation** the
+   owner begins in Omniscient, and closes when it ends or its page closes.
+   In it, any speech in which Vosk hears a word goes to Whisper (and to Groq
+   only when the owner chose it); nothing else leaves the ears. A dictated
+   phrase goes to the page's field only: not to the chat, and not to the
+   log.
 3. **No credentials in the repo or in output.** Do not read the owner's
    `~/.config/prophet-voice/settings.json`: it keeps the client key and the
    Groq key. The voice never sends a key back to a page.
@@ -58,5 +64,5 @@ uv run --extra audio prophet-voice run   # for real, with a key from your own co
 | The conversation | `src/prophet_voice/voice.py` |
 | The words it hears and says | `src/prophet_voice/words.py` |
 | The plugin: manifest, the key handed by Omniscient, the dialog's and the settings' API | `src/prophet_voice/settings_page.py` |
-| In Omniscient: the dialog (buttons, the cloud of points) and the settings page | `src/prophet_voice/omniscient.js` |
-| The dialog between the page and the running voice | `src/prophet_voice/dialog.py` |
+| In Omniscient: the dialog (buttons, the cloud of points), the dictation button by a field and the settings page | `src/prophet_voice/omniscient.js` |
+| The dialog and the dictation between the page and the running voice | `src/prophet_voice/dialog.py` |
