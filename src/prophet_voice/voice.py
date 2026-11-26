@@ -18,7 +18,9 @@ heard waits for its end.
 In a Private dialog the owner may speak over Prophet: the phrase is heard
 while Prophet reads, with no cue, and goes to the chat once Prophet has
 finished or was hushed. A phrase that is mostly what Prophet was reading
-then is Prophet's own, heard back, and is not sent.
+then is Prophet's own, heard back, and is not sent. While a phrase is being
+said, Whisper hears it so far again and again, and `live` is its text for
+Omniscient's page: the question is read as it is said.
 
 Omniscient's dialog button (the plugin's script) sets `dialog`. The
 microphone is open only in a Private dialog: it opens when the owner begins
@@ -66,6 +68,9 @@ from prophet_voice.hearing import Hearing
 from prophet_voice.mouth import Mouth
 
 log = logging.getLogger("prophet_voice.voice")
+LIVE_EVERY = 1.0  # seconds between Whisper's looks at a phrase being said
+LIVE_FROM = 1.0  # seconds of a phrase before the first look
+LIVE_UNTIL = 0.7  # seconds of quiet after which it is left to end: its text comes whole
 OWN_FOR = 30  # seconds before a phrase's end in which Prophet's words may be in it
 AFTER_QUESTION = 8  # seconds to begin answering a question Prophet asked aloud
 TURNS_AT_ONCE = 6  # turns of a phrase transcribed at once
@@ -100,6 +105,7 @@ class Voice:
         self.era = 0  # an ended dialog makes the phrases heard before it old
         self.said: set[int] = set()  # the messages read aloud, each once
         self.beginning: asyncio.Task | None = None  # a dialog's settings read, its greeting
+        self.live = ""  # the phrase being heard or sent, as far as Whisper has it
 
     @property
     def private(self) -> bool:
@@ -183,6 +189,7 @@ class Voice:
         self.microphone.clear()
         self.era += 1
         self.question = None
+        self.live = ""
         for task in list(self.followers):
             task.cancel()
         self.mouth.hush()
@@ -222,16 +229,42 @@ class Voice:
 
     async def serve(self) -> None:
         self.loop = asyncio.get_running_loop()
+        live = asyncio.create_task(self._live())
+        try:
+            while True:
+                audio, free, era, over = await self.phrases.get()
+                try:
+                    await self.handle(audio, free, era, over)
+                except CoreError as exc:
+                    log.error("the core refused: %s", exc)
+                    self.mouth.say(SAY_FAILED)
+                except Exception:
+                    log.exception("could not handle a phrase")
+                    self.mouth.say(SAY_FAILED)
+        finally:
+            live.cancel()
+
+    async def _live(self) -> None:
+        """The phrase being said, heard so far by Whisper, again and again."""
         while True:
-            audio, free, era, over = await self.phrases.get()
+            await asyncio.sleep(LIVE_EVERY)
             try:
-                await self.handle(audio, free, era, over)
-            except CoreError as exc:
-                log.error("the core refused: %s", exc)
-                self.mouth.say(SAY_FAILED)
-            except Exception:
-                log.exception("could not handle a phrase")
-                self.mouth.say(SAY_FAILED)
+                await self._live_once()
+            except Exception as exc:  # the phrase's end is heard whole all the same
+                log.warning("a phrase is not shown as it is said: %s", exc)
+
+    async def _live_once(self) -> None:
+        ears, era = self.ears, self.era
+        so_far = ears.so_far() if self.private and ears is not None else None
+        if so_far is None:
+            return
+        number, audio, since_voice = so_far
+        if since_voice > LIVE_UNTIL or speakers.length(audio) < LIVE_FROM:
+            return
+        text = await asyncio.to_thread(self.hearing.transcribe, audio)
+        still = ears.so_far()
+        if era == self.era and still is not None and still[0] == number:
+            self.live = words.alone(text, self.words)
 
     async def handle(
         self, audio: bytes, free: bool, era: int | None = None, over: bool = False
@@ -246,6 +279,8 @@ class Voice:
             await self._handle(audio, free, era, over)
         finally:
             self.hearing_now -= 1
+            if not self.hearing_now:
+                self.live = ""
 
     async def _handle(self, audio: bytes, free: bool, era: int, over: bool = False) -> None:
         apart = self.private and self.tell_apart and self.speakers is not None
@@ -279,6 +314,7 @@ class Voice:
             if words.echoed(plain or said, own):
                 log.info("Prophet's own words heard back: not sent")
                 return
+        self.live = plain or said  # as it goes to the chat
         if over:  # the question waits for Prophet to finish what it reads
             await asyncio.to_thread(self.mouth.wait)
             if era != self.era:

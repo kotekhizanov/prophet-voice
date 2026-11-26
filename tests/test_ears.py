@@ -334,9 +334,12 @@ def test_alone_the_owner_speaks_over_prophet():
     e.feed(loud(), 25)
     # A phrase, with no cue: «Ага?» would wait for Prophet to end.
     assert e.ears.state == "phrase" and not e.ears.tentative and e.events == []
+    number, audio, since = e.ears.so_far()
+    assert number == 1 and 0.9 < seconds(audio) < 1.7 and since == 0
     e.ears.echo.kept = 0.05  # the owner is done, Prophet goes on
     e.feed(loud(), 40)  # 1.4 s with no voice but Prophet's ends the phrase
     assert [x[0] for x in e.events] == ["phrase"] and e.events[0][3] == "over"
+    assert e.ears.so_far() is None
 
 
 def test_alone_prophets_own_voice_begins_nothing():

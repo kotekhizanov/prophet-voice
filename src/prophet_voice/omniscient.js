@@ -20,6 +20,8 @@ const STYLE = `
 @keyframes pv-turn{to{transform:rotate(360deg)}}
 .pv-said{display:flex;flex-direction:column;gap:.75rem;max-height:55vh;overflow-y:auto}
 .pv-said p{white-space:pre-wrap;font-size:.875rem;line-height:1.4rem}
+.pv-now{margin-top:.75rem;opacity:.65}
+.pv-now p{white-space:pre-wrap;font-size:.875rem;line-height:1.4rem;font-style:italic}
 .pv-voices{display:flex;flex-direction:column;gap:.5rem}
 .pv-voice{display:flex;align-items:center;gap:.5rem}
 .pv-voice .input{flex:1 1 0%;min-width:0;margin:0}
@@ -258,12 +260,14 @@ function dialogPage(prophet) {
   const pageButton = make("button", "btn btn-primary", { type: "button" }, "Private");
   const problem = make("p", "text-sm text-red-600 dark:text-red-400", { "aria-live": "polite" });
   const said = make("div", "pv-said");
+  // The phrase being said, as far as the voice has heard it: the question to come.
+  const nowText = make("p", ""), now = make("div", "pv-now", { hidden: "", "aria-live": "polite" }, make("div", "hint", {}, "You, now"), nowText);
   const voicesBox = make("div", "pv-voices"), voicesPart = make("div", "border-t border-zinc-200 px-5 py-3 dark:border-zinc-800", { hidden: "" },
     make("p", "hint mb-2", {}, "Voices in this dialog: name one and Prophet knows who says what."), voicesBox);
   const side = make("section", "panel pv-side",
     {}, make("div", "flex items-center gap-3 px-5 py-4", {},
       make("div", "mr-auto", {}, make("h3", "section-title", {}, "The dialog"), make("p", "hint mt-1", {}, "What is said in the chat meanwhile."))),
-    voicesPart, make("div", "border-t border-zinc-200 px-5 py-3 dark:border-zinc-800", {}, problem, said));
+    voicesPart, make("div", "border-t border-zinc-200 px-5 py-3 dark:border-zinc-800", {}, problem, said, now));
   side.firstChild.append(pageButton);
   const view = make("div", "pv-view", {}, stage, side);
   const shown = prophet.ui.page({ id: "dialog", title: "Voice", icon: "wave", render(body) { body.append(view); startOrb(); } });
@@ -332,7 +336,7 @@ function dialogPage(prophet) {
     const source = new EventSource(`${voiceAt}/dialog/events?page=${page}`);
     source.onmessage = (e) => heard(JSON.parse(e.data));
     source.onerror = () => {
-      live = null; end(false); setButtons(); drawVoices([]);
+      live = null; end(false); setButtons(); drawVoices([]); nowText.textContent = ""; now.hidden = true;
       if (source.readyState === EventSource.CLOSED) setTimeout(follow, 5000);  // else it tries again by itself
     };
   }
@@ -365,6 +369,8 @@ function dialogPage(prophet) {
   function heard(snapshot) {
     live = snapshot;
     drawVoices(live.voices);
+    const text = dialog ? live.text || "" : "";
+    if (nowText.textContent !== text) { nowText.textContent = text; now.hidden = !text; }
     orb.mic = Math.max(orb.mic, live.mic || 0);
     if (performance.now() - asked > SETTLE * 1000) {
       if (live.dialog && (!dialog || dialog.private !== (live.dialog === "private"))) {

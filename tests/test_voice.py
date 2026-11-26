@@ -95,6 +95,7 @@ class Ears:
         self.state = "waiting"
         self.tentative = False
         self.threshold = None
+        self.heard_so_far = None  # (the phrase's number, its audio, seconds since a voice)
 
     def configure(self, words, threshold):
         self.words, self.threshold = words, threshold
@@ -104,6 +105,9 @@ class Ears:
 
     def be_alone(self, on):
         self.alone = on
+
+    def so_far(self):
+        return self.heard_so_far
 
 
 def make(core, *texts, project=""):
@@ -708,6 +712,7 @@ def test_a_phrase_said_over_prophet_goes_once_prophet_has_finished():
     asyncio.run(go())
     assert v.mouth.said == [] and v.mouth.waits == 1  # no «Окей…»: it would be late
     assert core.calls == [("chat", "Погоди, а что с погодой?", None)]
+    assert v.live == ""
 
 
 def test_prophets_own_words_heard_back_are_not_sent():
@@ -716,3 +721,41 @@ def test_prophets_own_words_heard_back_are_not_sent():
     v.mouth.own = ["Сегодня курс доллара вырос на два рубля.", "Завтра будет ясно."]
     asyncio.run(v.handle(SECOND, True, None, True))
     assert core.calls == [] and v.mouth.said == [] and v.mouth.waits == 0
+
+
+def test_a_phrase_is_shown_as_it_is_said():
+    v = private(Core(), "Ага? Какая погода", "Какая погода завтра в Тбилиси?")
+    second = ears_wav([bytes(2 * 16000)])
+
+    async def go():
+        await v._live_once()  # nothing is being said
+        assert v.live == ""
+        v.ears.heard_so_far = (3, ears_wav([bytes(2 * 8000)]), 0.0)
+        await v._live_once()  # half a second: too little to hear
+        assert v.live == ""
+        v.ears.heard_so_far = (3, second, 0.1)
+        await v._live_once()
+        assert v.live == "Какая погода"  # without Prophet's own «Ага?»
+        v.ears.heard_so_far = (3, second, 1.0)
+        await v._live_once()  # quiet: the phrase is ending, and comes whole
+        assert v.live == "Какая погода"
+        v.ears.heard_so_far = None
+        await v.handle(b"", True)
+        assert v.live == ""
+
+    asyncio.run(go())
+    assert v.hearing.texts == []
+
+
+def test_a_look_at_a_phrase_that_ended_meanwhile_shows_nothing():
+    v = private(Core(), "Какая")
+
+    class Ending(Ears):
+        def so_far(self):
+            now, self.heard_so_far = self.heard_so_far, None
+            return now
+
+    v.ears = Ending()
+    v.ears.heard_so_far = (3, SECOND, 0.0)
+    asyncio.run(v._live_once())
+    assert v.live == ""

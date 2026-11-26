@@ -25,7 +25,8 @@ dropped here, unsaid and unsent. Once a word is heard, `on_begun` says so.
 With the `echo` that takes Prophet's voice out of the audio, the owner may
 speak over Prophet when alone: a phrase begins while Prophet reads, from the
 blocks the echo says were not Prophet's alone (`kept` of OVER_KEPT or more).
-Such a phrase (`over`) has no cue, and `on_phrase` is told of it.
+Such a phrase (`over`) has no cue, and `on_phrase` is told of it. `so_far`
+is the phrase being heard, for its text to be shown as it is said.
 
 Whether someone speaks is the loudness above VOICE_FROM against the room's
 quiet: a bus's rumble and a room's hum stay mostly below it, a voice does not.
@@ -110,6 +111,7 @@ class Ears:
         self.stop = None  # the cancel words' grammar, while Prophet reads
         self.echo = echo  # says how much of a block was not Prophet's (`kept`)
         self.over = False  # the phrase going on began over Prophet's voice
+        self.phrase_no = 0  # phrases begun so far
         self.clock = 0.0  # seconds of audio heard, as Vosk's word times count them
         self.state = "waiting"  # or "phrase"
         self.recent: deque[tuple[float, bytes]] = deque()
@@ -157,6 +159,14 @@ class Ears:
         if self.state == "phrase" or not self.mouth.speaking:
             return True
         return self.alone and self.echo is not None
+
+    def so_far(self) -> tuple[int, bytes, float] | None:
+        """The phrase being heard (from another thread): its number, its audio so
+        far and the seconds since a voice was in it. None when there is none,
+        or no word was heard in it yet."""
+        if self.state != "phrase" or self.tentative:
+            return None
+        return self.phrase_no, wav(list(self.phrase)), self.clock - self.last_voice
 
     def hear(self, block: bytes) -> None:
         seconds, at = len(block) / 2 / RATE, self.clock
@@ -262,6 +272,7 @@ class Ears:
         """A phrase from `start` on: from the ring, then each new block."""
         self.phrase = [b for at, b in self.recent if at + len(b) / 2 / RATE > start]
         self.state, self.free_for, self.over = "phrase", free_for, False
+        self.phrase_no += 1
         self.woke_at = self.last_voice = start
         self.voiced = 0.0
         self.recent.clear()

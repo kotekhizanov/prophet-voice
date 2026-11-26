@@ -5,8 +5,9 @@ Prophet 1 had it: the Casual dialog and Private buttons, and a cloud of
 points that breathes, thinks and speaks. It talks to `prophet-voice run`
 through the settings server on this machine: `POST /dialog` begins, changes
 or ends the dialog, and `GET /dialog/events` streams how the voice is now
-(Server-Sent Events): what it does, how loud the owner and Prophet are, and
-its wake word for the captions, and in a Private dialog the voices heard in
+(Server-Sent Events): what it does, how loud the owner and Prophet are, its
+wake word for the captions, the phrase being said as far as Whisper has it
+(`text`), and in a Private dialog the voices heard in
 it (speakers.py), which the page may name (`POST /dialog/voice`).
 
 A dialog belongs to the page that began it (each page names itself, `page`)
@@ -41,6 +42,7 @@ class Dialog:
             "mic": round(ears.level, 3) if ears is not None else 0.0,
             "voice": round(v.mouth.level, 3),
             "wake": v.words["wake"],
+            "text": v.live,
             "voices": v.speakers.voices.shown() if v.speakers and v.private else [],
         }
 

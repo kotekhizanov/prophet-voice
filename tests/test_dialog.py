@@ -50,11 +50,13 @@ def test_a_private_dialog_shows_its_voices(home):
         mouth=SimpleNamespace(level=0.0),
         words={"wake": ["пророк"]},
         state=lambda: "waiting",
+        live="Какая погода",
         speakers=Speakers(None, None, Voices(home / "voices.json")),
     )
     d = Dialog(voice)
     voice.speakers.voices.who([1.0, 0.0])
     d.name_voice(1, "Аня")
     assert d.snapshot()["voices"] == [{"id": 1, "label": "Аня", "named": True}]
+    assert d.snapshot()["text"] == "Какая погода"  # the phrase being said, so far
     voice.private, voice.dialog = False, "casual"
     assert d.snapshot()["voices"] == []
