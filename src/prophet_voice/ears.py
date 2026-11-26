@@ -22,6 +22,11 @@ tentative until Vosk with its whole vocabulary hears a word in it, within
 CONFIRM_WITHIN seconds: a passing bus or a slammed door has none and is
 dropped here, unsaid and unsent. Once a word is heard, `on_begun` says so.
 
+With the `echo` that takes Prophet's voice out of the audio, the owner may
+speak over Prophet when alone: a phrase begins while Prophet reads, from the
+blocks the echo says were not Prophet's alone (`kept` of OVER_KEPT or more).
+Such a phrase (`over`) has no cue, and `on_phrase` is told of it.
+
 Whether someone speaks is the loudness above VOICE_FROM against the room's
 quiet: a bus's rumble and a room's hum stay mostly below it, a voice does not.
 `level` is that loudness for Omniscient's picture, 0 to 1.
@@ -62,6 +67,7 @@ MAX_PHRASE = 60  # seconds
 DEAF = 0.5  # seconds after Prophet speaks: its echo dies out
 ONSET = 0.3  # seconds of voice that begin a phrase when alone
 PRE_ROLL = 0.6  # seconds kept from before it: the first syllable starts quieter
+OVER_KEPT = 0.2  # of a block's power that was not Prophet's, for the owner to be in it
 CONFIRM_WITHIN = 3  # seconds for Vosk to hear a word in a sound before it is dropped
 VOSK_MODEL = "vosk-model-small-ru-0.22"
 
@@ -89,6 +95,7 @@ class Ears:
         on_phrase,
         on_begun=None,
         on_stop=None,
+        echo=None,
     ):
         """`recognizer(grammar)` makes a Vosk recognizer (`VoskRecognizer`); a
         grammar of None is Vosk's whole vocabulary. `mouth` says whether
@@ -101,6 +108,8 @@ class Ears:
         self.on_begun = on_begun or (lambda: None)
         self.on_stop = on_stop or (lambda: None)
         self.stop = None  # the cancel words' grammar, while Prophet reads
+        self.echo = echo  # says how much of a block was not Prophet's (`kept`)
+        self.over = False  # the phrase going on began over Prophet's voice
         self.clock = 0.0  # seconds of audio heard, as Vosk's word times count them
         self.state = "waiting"  # or "phrase"
         self.recent: deque[tuple[float, bytes]] = deque()
@@ -143,22 +152,29 @@ class Ears:
 
     @property
     def listening(self) -> bool:
-        """Not while Prophet speaks, but for a phrase already begun."""
-        return self.state == "phrase" or not self.mouth.speaking
+        """Not while Prophet speaks, but for a phrase already begun, and when
+        alone with an echo that takes Prophet's voice out."""
+        if self.state == "phrase" or not self.mouth.speaking:
+            return True
+        return self.alone and self.echo is not None
 
     def hear(self, block: bytes) -> None:
         seconds, at = len(block) / 2 / RATE, self.clock
         self.clock += seconds
+        if self.mouth.speaking and (self.state == "waiting" or self.over):
+            self._stops(block)
+        else:
+            self.stop = None
         if not self.listening:
             self.was_speaking, self.renew, self.level = True, True, 0.0
-            self._stops(block)
             return
-        self.stop = None
         if self.renew:  # Vosk's times would skip the blocks it was not given
             self.wake = self.recognizer([*self.words["wake"], "[unk]"])
             self.wake_from, self.renew = at, False
         voice = self._voice(np.frombuffer(block, np.int16).astype(np.float32) / 32768)
         speaking = self.mouth.speaking
+        if speaking and self.echo is not None and self.echo.kept < OVER_KEPT:
+            voice, self.level = False, 0.0  # what is loud in this block is Prophet
         if self.was_speaking and not speaking:  # what was heard meanwhile was Prophet's own
             self.waiting_since, self.deaf_until = self.clock, self.clock + DEAF
         self.was_speaking = speaking
@@ -216,6 +232,8 @@ class Ears:
         sure = " ".join(w["word"] for w in found if w.get("conf", 1.0) >= self.threshold)
         if said_in(sure, cancel) and not said_in(saying, cancel):  # not Prophet's own
             self.stop = None
+            if self.over:  # the phrase it was said in is not a question
+                self._wait()
             self.on_stop()
 
     # ---- the wake word -------------------------------------------------------------
@@ -243,7 +261,7 @@ class Ears:
     def _open(self, start: float, free_for: float) -> None:
         """A phrase from `start` on: from the ring, then each new block."""
         self.phrase = [b for at, b in self.recent if at + len(b) / 2 / RATE > start]
-        self.state, self.free_for = "phrase", free_for
+        self.state, self.free_for, self.over = "phrase", free_for, False
         self.woke_at = self.last_voice = start
         self.voiced = 0.0
         self.recent.clear()
@@ -251,7 +269,7 @@ class Ears:
     def _wait(self) -> None:
         self.state, self.phrase, self.free_for = "waiting", [], 0.0
         self.waiting_since = self.clock
-        self.tentative, self.check, self.onset = False, None, 0.0
+        self.tentative, self.check, self.onset, self.over = False, None, 0.0, False
 
     def _drop(self) -> None:
         free = bool(self.free_for)
@@ -260,14 +278,15 @@ class Ears:
             self.on_drop()
 
     def _send(self) -> None:
-        audio, free = wav(self.phrase), bool(self.free_for)
+        audio, free, over = wav(self.phrase), bool(self.free_for), self.over
         self._wait()
-        self.on_phrase(audio, free)
+        self.on_phrase(audio, free, over)
 
     # ---- alone: speech begins a phrase ------------------------------------------------
 
     def _begins(self, voice: bool, seconds: float) -> None:
-        """ONSET seconds of voice, with short gaps forgiven, while Prophet is silent."""
+        """ONSET seconds of voice, with short gaps forgiven: while Prophet is silent,
+        or over it (a voice then is what the echo did not take for Prophet's)."""
         if self.clock < self.deaf_until:
             self.onset = 0.0
             return
@@ -277,6 +296,7 @@ class Ears:
         voiced = self.onset
         self._open(self.clock - voiced - PRE_ROLL, CONFIRM_WITHIN)
         self.voiced, self.last_voice = voiced, self.clock
+        self.over = self.mouth.speaking
         self.tentative, self.check = True, self.recognizer(None)
         for b in list(self.phrase):
             if self.tentative:
@@ -292,7 +312,8 @@ class Ears:
         if not is_speech(text):
             return
         self.tentative, self.check = False, None
-        self.on_begun()
+        if not self.over:  # a cue would wait for Prophet to end, and then be late
+            self.on_begun()
 
     # ---- loudness ---------------------------------------------------------------------
 

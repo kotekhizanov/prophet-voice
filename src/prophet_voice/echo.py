@@ -14,6 +14,10 @@ the microphone's buffers, up to LAGS hops) is not known: it is found by
 where the loudness of the two goes up and down together. Until then every
 delay is taken as possible, and more is lowered than need be.
 
+`kept` is the share of the last block's power, where a voice is loud, that
+was let through: little when the microphone had Prophet alone, much when the
+owner spoke over it. The ears tell the two apart by it.
+
 Only the powers are compared, not the waves: a few milliseconds of error in
 the time cost nothing. With nothing played, the audio passes as it is. Like
 the denoiser, it works in frames of FRAME samples that overlap by half and
@@ -78,6 +82,8 @@ class Echo:
         self.own_loud: deque[float] = deque(maxlen=HISTORY + LAGS)
         self.hops = 0
         self.idle = LAGS + 1  # hops since anything played: past LAGS, nothing of it is left
+        self.kept = 1.0  # of the last block's power, the share that was not Prophet's
+        self.shares: list[float] = []  # of each hop of the block going on
 
     # ---- from the mouth ----------------------------------------------------------------
 
@@ -109,6 +115,8 @@ class Echo:
             for i in range(hops)
         ]
         self.ready = np.concatenate([self.ready, *done])
+        if self.shares:  # the owner in any part of the block is the owner
+            self.kept, self.shares = max(self.shares), []
         self.pending = x[hops * HOP :]
         if len(self.ready) < len(samples):  # the first blocks: silence while it is late
             self.ready = np.concatenate([np.zeros(len(samples) - len(self.ready)), self.ready])
@@ -128,7 +136,11 @@ class Echo:
         if self.hops % SEARCH == 0 and self.idle <= LAGS:
             self._find()
         if self.idle <= LAGS or self.ring.max() > 1:
-            spectrum = spectrum * self._gain(power)
+            gain = self._gain(power)
+            spectrum = spectrum * gain
+            self.shares.append(float((power[BAND] * gain[BAND] ** 2).sum() / power[BAND].sum()))
+        else:
+            self.shares.append(1.0)
         y = np.fft.irfft(spectrum, FRAME).astype(np.float32) * self.window
         self.tail += y
         done = self.tail[:HOP].copy()

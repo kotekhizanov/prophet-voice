@@ -29,6 +29,15 @@ def test_said_in_is_a_whole_word_anywhere():
     assert not words.said_in("", ["стоп"])
 
 
+def test_echoed_is_mostly_what_prophet_was_saying():
+    own = ["Сегодня курс доллара вырос на два рубля.", "Завтра будет ясно."]
+    assert words.echoed("сегодня курс доллара вырос", own)
+    assert words.echoed("Курс долара вырос на два рубля", own)  # a word misheard
+    assert not words.echoed("Погоди, а что с погодой завтра?", own)
+    assert not words.echoed("да", own) and not words.echoed("", own)
+    assert not words.echoed("сегодня курс", [])
+
+
 def test_cancelled_at_the_start_or_the_end():
     cancel = ["отмена"]
     assert words.cancelled("отмена", cancel)

@@ -15,6 +15,11 @@ the voice does not hear itself in a cancel word or in a phrase.
 Prophet never talks over the owner: an answer that comes while a phrase is
 heard waits for its end.
 
+In a Private dialog the owner may speak over Prophet: the phrase is heard
+while Prophet reads, with no cue, and goes to the chat once Prophet has
+finished or was hushed. A phrase that is mostly what Prophet was reading
+then is Prophet's own, heard back, and is not sent.
+
 Omniscient's dialog button (the plugin's script) sets `dialog`. The
 microphone is open only in a Private dialog: it opens when the owner begins
 one in Omniscient's chat and closes when it ends. Private has no wake word:
@@ -61,6 +66,7 @@ from prophet_voice.hearing import Hearing
 from prophet_voice.mouth import Mouth
 
 log = logging.getLogger("prophet_voice.voice")
+OWN_FOR = 30  # seconds before a phrase's end in which Prophet's words may be in it
 AFTER_QUESTION = 8  # seconds to begin answering a question Prophet asked aloud
 TURNS_AT_ONCE = 6  # turns of a phrase transcribed at once
 FINAL = ("done", "failed", "cancelled", "paused")
@@ -198,10 +204,11 @@ class Voice:
         self.mouth.tone(False)
         asyncio.run_coroutine_threadsafe(self._cancel(), self.loop)
 
-    def on_phrase(self, audio: bytes, free: bool) -> None:
-        if self.private:
+    def on_phrase(self, audio: bytes, free: bool, over: bool = False) -> None:
+        """A phrase has ended; `over`: it was said over Prophet's voice."""
+        if self.private and not over:
             self.mouth.cue(words.pick(self.words["heard"]), CUE_VOLUME["heard"])
-        self.loop.call_soon_threadsafe(self.phrases.put_nowait, (audio, free, self.era))
+        self.loop.call_soon_threadsafe(self.phrases.put_nowait, (audio, free, self.era, over))
 
     def on_microphone_failed(self, exc: Exception) -> None:
         """The dialog cannot hear: it ends, and Omniscient's page goes back to the chat."""
@@ -216,9 +223,9 @@ class Voice:
     async def serve(self) -> None:
         self.loop = asyncio.get_running_loop()
         while True:
-            audio, free, era = await self.phrases.get()
+            audio, free, era, over = await self.phrases.get()
             try:
-                await self.handle(audio, free, era)
+                await self.handle(audio, free, era, over)
             except CoreError as exc:
                 log.error("the core refused: %s", exc)
                 self.mouth.say(SAY_FAILED)
@@ -226,18 +233,21 @@ class Voice:
                 log.exception("could not handle a phrase")
                 self.mouth.say(SAY_FAILED)
 
-    async def handle(self, audio: bytes, free: bool, era: int | None = None) -> None:
-        """A phrase heard in `era`: none of a dialog that has ended since."""
+    async def handle(
+        self, audio: bytes, free: bool, era: int | None = None, over: bool = False
+    ) -> None:
+        """A phrase heard in `era`: none of a dialog that has ended since. `over`:
+        it was said over Prophet's voice."""
         era = self.era if era is None else era
         if era != self.era:
             return
         self.hearing_now += 1
         try:
-            await self._handle(audio, free, era)
+            await self._handle(audio, free, era, over)
         finally:
             self.hearing_now -= 1
 
-    async def _handle(self, audio: bytes, free: bool, era: int) -> None:
+    async def _handle(self, audio: bytes, free: bool, era: int, over: bool = False) -> None:
         apart = self.private and self.tell_apart and self.speakers is not None
         if apart:
             turns = await asyncio.to_thread(self._turns, audio)
@@ -264,6 +274,15 @@ class Voice:
             await self._cancel()
             self.mouth.tone(False)
             return
+        if over:
+            own = self.mouth.lately(speakers.length(audio) + OWN_FOR)
+            if words.echoed(plain or said, own):
+                log.info("Prophet's own words heard back: not sent")
+                return
+        if over:  # the question waits for Prophet to finish what it reads
+            await asyncio.to_thread(self.mouth.wait)
+            if era != self.era:
+                return
         if self.question is not None:
             question, self.question = self.question, None
             await self.core.answer(question, said)
@@ -525,6 +544,7 @@ async def _run(settings: dict, models) -> None:
         voice.on_phrase,
         voice.on_begun,
         voice.on_stop,
+        echo,
     )
     stop = threading.Event()
     serving = asyncio.create_task(voice.serve())

@@ -30,6 +30,7 @@ import re
 import threading
 import time
 import warnings
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -212,6 +213,7 @@ class Mouth:
         self._busy = 0  # texts queued or being read
         self._lock = threading.Lock()
         self.saying = ""
+        self._said: deque[tuple[float, str]] = deque(maxlen=200)  # (when, the piece read)
         self.quiet_since = time.monotonic()
         self._playing = None  # (samples, rate, when it began) of the sound playing now
         threading.Thread(target=self._work, name="mouth", daemon=True).start()
@@ -261,6 +263,11 @@ class Mouth:
         self.out.stop()
         if self.echo is not None:
             self.echo.stopped()
+
+    def lately(self, seconds: float) -> list[str]:
+        """The pieces read in the last `seconds`: what the microphone may have heard."""
+        since = time.monotonic() - seconds
+        return [piece for at, piece in list(self._said) if at >= since]
 
     def wait(self, timeout: float = 120) -> None:
         """Until everything said so far has been read."""
@@ -313,6 +320,7 @@ class Mouth:
                 if i:
                     samples = np.concatenate([np.zeros(int(RATE * PAUSE), np.int16), samples])
                 self.saying = piece
+                self._said.append((time.monotonic(), piece))
                 self._play(samples)
                 if gen != self._gen:
                     return
@@ -325,6 +333,7 @@ class Mouth:
             return
         samples = self._ready()(said)
         self.saying = said
+        self._said.append((time.monotonic(), said))
         self._play((samples.astype(np.float32) * volume).astype(np.int16))
 
     def _play(self, samples: np.ndarray) -> None:

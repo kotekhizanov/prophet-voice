@@ -148,6 +148,21 @@ def said_in(text: str, variants: list[str]) -> bool:
     return bool(re.search(rf"(?<![а-яё])(?:{_variants(variants)})(?![а-яё])", text, re.I))
 
 
+ECHOED = 0.6  # of a phrase's words that Prophet was saying: it heard Prophet
+
+
+def echoed(said: str, own: list[str]) -> bool:
+    """A phrase heard over Prophet that is mostly what Prophet was saying then
+    (`own`, the pieces it read): the microphone heard Prophet, not the owner."""
+
+    def plain(text: str) -> list[str]:
+        return [w.replace("ё", "е") for w in re.findall(r"[а-яёa-z]+", text.lower())]
+
+    mine = {w for text in own for w in plain(text)}
+    heard = [w for w in plain(said) if len(w) >= 3]
+    return bool(heard) and sum(w in mine for w in heard) >= ECHOED * len(heard)
+
+
 def cancelled(said: str, cancel: list[str]) -> bool:
     """A phrase dropped: it begins or ends with a cancel word."""
     words = _variants(cancel)

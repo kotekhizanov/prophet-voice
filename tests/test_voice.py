@@ -7,6 +7,7 @@ import pytest
 
 from prophet_voice import config, voice
 from prophet_voice.core import CoreError
+from prophet_voice.ears import wav as ears_wav
 from prophet_voice.voice import Voice
 
 KEY = "pk_" + "a" * 43
@@ -47,6 +48,8 @@ class Mouth:
         self.said = []
         self.speaking = False
         self.saying = ""
+        self.own = []  # the pieces read lately
+        self.waits = 0
 
     def say(self, text):
         self.said.append(text)
@@ -61,7 +64,10 @@ class Mouth:
         self.said.append("hush")
 
     def wait(self, timeout=120):
-        pass
+        self.waits += 1
+
+    def lately(self, seconds):
+        return self.own
 
 
 class Hearing:
@@ -632,10 +638,8 @@ def test_private_with_one_voice_says_nothing_of_whose_it_is():
 
 
 def test_private_with_two_voices_says_who_said_what():
-    from prophet_voice.ears import wav
-
     core = Core([("run", {"run_id": 5, "status": "done"})])
-    phrase = wav([n.to_bytes(2, "little") * 16000 for n in (1, 2, 3, 4)])  # four seconds
+    phrase = ears_wav([n.to_bytes(2, "little") * 16000 for n in (1, 2, 3, 4)])  # four seconds
     parts = [(0.0, 1.0, ANYA), (1.0, 2.0, KOSTYA), (2.0, 3.0, ANYA), (3.0, 4.0, KOSTYA)]
     # Each turn goes to Whisper on its own; the whole phrase too, while it is split.
     texts = {1: "Привет", 2: "Привет", 3: "Как дела?", 4: "Хорошо"}
@@ -678,3 +682,37 @@ def test_a_new_dialog_hears_its_voices_anew():
     v.set_dialog(None)
     v.set_dialog("private")
     assert v.speakers.voices.shown() == []
+
+
+SECOND = ears_wav([bytes(32000)])  # a second of silence, as the ears give it
+
+
+def private(core, *texts):
+    v = make(core, *texts)
+    v.set_dialog("private")
+    v.mouth.said.clear()
+    return v
+
+
+def test_a_phrase_said_over_prophet_goes_once_prophet_has_finished():
+    core = Core([("run", {"run_id": 5, "status": "done"})])
+    v = private(core, "Погоди, а что с погодой?")
+    v.mouth.own = ["Сегодня курс такой-то."]
+
+    async def go():
+        v.loop = asyncio.get_running_loop()
+        v.on_phrase(SECOND, True, True)
+        await v.handle(*await v.phrases.get())
+        await settle(v)
+
+    asyncio.run(go())
+    assert v.mouth.said == [] and v.mouth.waits == 1  # no «Окей…»: it would be late
+    assert core.calls == [("chat", "Погоди, а что с погодой?", None)]
+
+
+def test_prophets_own_words_heard_back_are_not_sent():
+    core = Core()
+    v = private(core, "сегодня курс доллара вырос")
+    v.mouth.own = ["Сегодня курс доллара вырос на два рубля.", "Завтра будет ясно."]
+    asyncio.run(v.handle(SECOND, True, None, True))
+    assert core.calls == [] and v.mouth.said == [] and v.mouth.waits == 0

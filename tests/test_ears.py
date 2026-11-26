@@ -63,7 +63,7 @@ class Mouth:
 class Ears_:
     """Ears with recorded callbacks."""
 
-    def __init__(self, plan, threshold=0.8):
+    def __init__(self, plan, threshold=0.8, echo=None):
         self.events = []
         self.mouth = Mouth()
         self.recognizers = Recognizers(plan)
@@ -74,9 +74,12 @@ class Ears_:
             self.mouth,
             on_wake=lambda: self.events.append(("wake",)),
             on_drop=lambda: self.events.append(("drop",)),
-            on_phrase=lambda audio, free: self.events.append(("phrase", seconds(audio), free)),
+            on_phrase=lambda audio, free, over: self.events.append(
+                ("phrase", seconds(audio), free, *(["over"] if over else []))
+            ),
             on_begun=lambda: self.events.append(("begun",)),
             on_stop=lambda: self.events.append(("stop",)),
+            echo=echo,
         )
 
     def feed(self, block, n):
@@ -308,6 +311,57 @@ def test_alone_nothing_begins_while_prophet_speaks():
     e.feed(quiet(), 25)
     e.feed(loud(), 25)
     assert e.ears.state == "waiting" and e.events == []
+
+
+class Kept:
+    """An echo as a script: how much of each block was not Prophet's."""
+
+    def __init__(self, kept):
+        self.kept = kept
+
+
+def over_prophet(kept, plan=None):
+    e = Ears_(plan or {"whole": {1: [word("погоди", 0.2, 0.6)]}}, echo=Kept(kept))
+    e.ears.be_alone(True)
+    e.feed(quiet(), 25)
+    e.mouth.speaking, e.mouth.saying = True, "Длинный ответ."
+    return e
+
+
+def test_alone_the_owner_speaks_over_prophet():
+    e = over_prophet(0.6)
+    assert e.ears.listening
+    e.feed(loud(), 25)
+    # A phrase, with no cue: «Ага?» would wait for Prophet to end.
+    assert e.ears.state == "phrase" and not e.ears.tentative and e.events == []
+    e.ears.echo.kept = 0.05  # the owner is done, Prophet goes on
+    e.feed(loud(), 40)  # 1.4 s with no voice but Prophet's ends the phrase
+    assert [x[0] for x in e.events] == ["phrase"] and e.events[0][3] == "over"
+
+
+def test_alone_prophets_own_voice_begins_nothing():
+    e = over_prophet(0.05)
+    e.feed(loud(), 50)
+    assert e.ears.state == "waiting" and e.events == [] and e.ears.level == 0
+
+
+def test_a_cancel_word_over_prophet_drops_the_phrase_it_was_said_in():
+    e = over_prophet(
+        0.6, {"whole": {1: [word("стоп", 0.2, 0.6)]}, "stop": {30: [word("стоп", 0.2, 0.5)]}}
+    )
+    e.ears.configure({**defaults(), "cancel": ["отмена", "стоп"]}, 0.8)
+    e.feed(loud(), 29)
+    assert e.ears.state == "phrase"
+    e.feed(loud(), 1)
+    assert e.events == [("stop",)] and e.ears.state == "waiting"
+
+
+def test_without_an_echo_nothing_begins_over_prophet():
+    e = Ears_({"whole": {1: [word("погоди", 0.2, 0.6)]}})
+    e.ears.be_alone(True)
+    e.mouth.speaking = True
+    e.feed(loud(), 50)
+    assert not e.ears.listening and e.ears.state == "waiting"
 
 
 def test_the_level_is_the_voice_above_the_quiet():

@@ -40,6 +40,11 @@ Everything runs on this machine (a Mac with a microphone and speakers):
 - While Prophet speaks the voice does not listen: the microphone would hear
   Prophet, not you (its own «Пророк» would wake it). Only a phrase you have
   begun goes on under the tone or the cue.
+- In a Private dialog you may speak over Prophet: the phrase is heard while
+  it reads (what the microphone has of Prophet's own voice is told from
+  yours), and goes to the chat once Prophet has finished or you stopped it.
+  A phrase that is mostly what Prophet was reading then is its own voice
+  heard back, and is not sent.
 - A cancel word («Пророк, отмена») sends nothing and cancels the answer
   being prepared. Said over Prophet while it reads («стоп», if you added
   it), it hushes Prophet and cancels the rest of the answer: Vosk listens
