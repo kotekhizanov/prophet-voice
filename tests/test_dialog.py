@@ -50,7 +50,7 @@ def test_a_private_dialog_shows_its_voices(home):
         mouth=SimpleNamespace(level=0.0),
         words={"wake": ["пророк"]},
         state=lambda: "waiting",
-        live="Какая погода",
+        showing=lambda: "Какая погода",
         speakers=Speakers(None, None, Voices(home / "voices.json")),
     )
     d = Dialog(voice)

@@ -80,6 +80,9 @@ class Ears_:
             on_begun=lambda: self.events.append(("begun",)),
             on_stop=lambda: self.events.append(("stop",)),
             echo=echo,
+            on_part=lambda audio, upto: self.events.append(
+                ("part", audio and round(seconds(audio), 1), upto)
+            ),
         )
 
     def feed(self, block, n):
@@ -313,6 +316,33 @@ def test_alone_nothing_begins_while_prophet_speaks():
     assert e.ears.state == "waiting" and e.events == []
 
 
+def test_alone_a_phrase_is_heard_as_it_is_said():
+    # Vosk goes on after the first word: its words so far, and at a pause the part
+    # before it is given away while the owner goes on.
+    e = Ears_({"whole": {1: [word("какая", 0.2, 0.6)], 60: [word("погода", 1.0, 1.5)]}})
+    e.ears.be_alone(True)
+    e.feed(quiet(), 25)
+    e.feed(loud(), 100)  # 4 s of speech
+    assert e.events == [("begun",)] and e.ears.text == "какая погода"
+    e.feed(quiet(), 13)  # half a second of quiet: a part, up to the pause's middle
+    assert e.events[1][0] == "part" and 4.3 < e.events[1][1] < 5.0 and e.events[1][2] == 2
+    e.feed(loud(), 25)  # the owner goes on: too little for a part of its own
+    e.feed(quiet(), 40)
+    assert [x[0] for x in e.events] == ["begun", "part", "part", "phrase"]
+    assert 2.0 < e.events[2][1] < 2.7  # the rest of it, as the phrase ends
+    assert abs(e.events[1][1] + e.events[2][1] - e.events[3][1]) < 0.11  # all of it, once
+    assert e.ears.text == ""
+
+
+def test_alone_a_short_phrase_has_no_parts():
+    e = Ears_({"whole": {1: [word("какая", 0.2, 0.6)]}})
+    e.ears.be_alone(True)
+    e.feed(quiet(), 25)
+    e.feed(loud(), 30)
+    e.feed(quiet(), 40)
+    assert [x[0] for x in e.events] == ["begun", "phrase"]
+
+
 class Kept:
     """An echo as a script: how much of each block was not Prophet's."""
 
@@ -334,12 +364,9 @@ def test_alone_the_owner_speaks_over_prophet():
     e.feed(loud(), 25)
     # A phrase, with no cue: «Ага?» would wait for Prophet to end.
     assert e.ears.state == "phrase" and not e.ears.tentative and e.events == []
-    number, audio, since = e.ears.so_far()
-    assert number == 1 and 0.9 < seconds(audio) < 1.7 and since == 0
     e.ears.echo.kept = 0.05  # the owner is done, Prophet goes on
     e.feed(loud(), 40)  # 1.4 s with no voice but Prophet's ends the phrase
     assert [x[0] for x in e.events] == ["phrase"] and e.events[0][3] == "over"
-    assert e.ears.so_far() is None
 
 
 def test_alone_prophets_own_voice_begins_nothing():

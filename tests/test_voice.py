@@ -95,7 +95,7 @@ class Ears:
         self.state = "waiting"
         self.tentative = False
         self.threshold = None
-        self.heard_so_far = None  # (the phrase's number, its audio, seconds since a voice)
+        self.text = ""  # the phrase so far, as Vosk has it
 
     def configure(self, words, threshold):
         self.words, self.threshold = words, threshold
@@ -105,9 +105,6 @@ class Ears:
 
     def be_alone(self, on):
         self.alone = on
-
-    def so_far(self):
-        return self.heard_so_far
 
 
 def make(core, *texts, project=""):
@@ -723,39 +720,50 @@ def test_prophets_own_words_heard_back_are_not_sent():
     assert core.calls == [] and v.mouth.said == [] and v.mouth.waits == 0
 
 
-def test_a_phrase_is_shown_as_it_is_said():
-    v = private(Core(), "Ага? Какая погода", "Какая погода завтра в Тбилиси?")
-    second = ears_wav([bytes(2 * 16000)])
+def test_a_phrase_is_heard_part_by_part_as_it_is_said():
+    core = Core([("run", {"run_id": 5, "status": "done"})])
+    v = private(core, "Какая погода", "завтра в Тбилиси?")
+    v.ears.state, v.ears.text = "phrase", "ага какая"
 
     async def go():
-        await v._live_once()  # nothing is being said
-        assert v.live == ""
-        v.ears.heard_so_far = (3, ears_wav([bytes(2 * 8000)]), 0.0)
-        await v._live_once()  # half a second: too little to hear
-        assert v.live == ""
-        v.ears.heard_so_far = (3, second, 0.1)
-        await v._live_once()
-        assert v.live == "Какая погода"  # without Prophet's own «Ага?»
-        v.ears.heard_so_far = (3, second, 1.0)
-        await v._live_once()  # quiet: the phrase is ending, and comes whole
-        assert v.live == "Какая погода"
-        v.ears.heard_so_far = None
-        await v.handle(b"", True)
-        assert v.live == ""
+        v.loop = asyncio.get_running_loop()
+        assert v.showing() == "какая"  # Vosk's words at once, without Prophet's own «Ага?»
+        v.on_part(SECOND, 3)  # a pause: the part before it goes to Whisper now
+        v.parts[0][1].result(2)
+        v.ears.text = "ага какая погода завтра"
+        assert v.showing() == "Какая погода завтра"  # Whisper's, then Vosk's of the rest
+        v.on_part(SECOND, 6)  # the rest of it, as the phrase ends
+        v.on_phrase(SECOND + SECOND, True)
+        v.ears.state, v.ears.text = "waiting", ""
+        assert v.parts == [] and v.showing() == "Какая погода завтра"  # kept till it is sent
+        await v.handle(*await v.phrases.get())
+        await settle(v)
 
     asyncio.run(go())
-    assert v.hearing.texts == []
+    assert v.hearing.texts == []  # each part once, and not the whole phrase again
+    assert core.calls == [("chat", "Какая погода завтра в Тбилиси?", None)]
+    assert v.showing() == ""
 
 
-def test_a_look_at_a_phrase_that_ended_meanwhile_shows_nothing():
+def test_a_part_whisper_could_not_hear_has_the_whole_phrase_heard():
+    core = Core([("run", {"run_id": 5, "status": "done"})])
+    v = private(core, "Какая погода завтра?")
+    heard, v.hearing.transcribe = v.hearing.transcribe, None  # the part's hearing fails
+
+    async def go():
+        v.loop = asyncio.get_running_loop()
+        v.on_part(SECOND, 2)
+        v.hearing.transcribe = heard
+        v.on_phrase(SECOND, True)
+        await v.handle(*await v.phrases.get())
+        await settle(v)
+
+    asyncio.run(go())
+    assert core.calls == [("chat", "Какая погода завтра?", None)]
+
+
+def test_a_dropped_phrase_leaves_no_parts():
     v = private(Core(), "Какая")
-
-    class Ending(Ears):
-        def so_far(self):
-            now, self.heard_so_far = self.heard_so_far, None
-            return now
-
-    v.ears = Ending()
-    v.ears.heard_so_far = (3, SECOND, 0.0)
-    asyncio.run(v._live_once())
-    assert v.live == ""
+    v.on_part(SECOND, 1)
+    v.on_part(None, 0)
+    assert v.parts == []

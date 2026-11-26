@@ -20,8 +20,9 @@ const STYLE = `
 @keyframes pv-turn{to{transform:rotate(360deg)}}
 .pv-said{display:flex;flex-direction:column;gap:.75rem;max-height:55vh;overflow-y:auto}
 .pv-said p{white-space:pre-wrap;font-size:.875rem;line-height:1.4rem}
-.pv-now{margin-top:.75rem;opacity:.65}
-.pv-now p{white-space:pre-wrap;font-size:.875rem;line-height:1.4rem;font-style:italic}
+.pv-now{position:absolute;left:0;right:0;bottom:calc(12% + 2rem);max-height:7.5rem;padding:0 1.5rem;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;text-align:center;font-size:1.0625rem;line-height:1.5rem;color:rgb(24 24 27/.9)}
+.dark .pv-now{color:rgb(244 244 245/.92)}
+.pv-now p{margin:0 auto;max-width:44rem;white-space:pre-wrap}
 .pv-voices{display:flex;flex-direction:column;gap:.5rem}
 .pv-voice{display:flex;align-items:center;gap:.5rem}
 .pv-voice .input{flex:1 1 0%;min-width:0;margin:0}
@@ -260,14 +261,16 @@ function dialogPage(prophet) {
   const pageButton = make("button", "btn btn-primary", { type: "button" }, "Private");
   const problem = make("p", "text-sm text-red-600 dark:text-red-400", { "aria-live": "polite" });
   const said = make("div", "pv-said");
-  // The phrase being said, as far as the voice has heard it: the question to come.
-  const nowText = make("p", ""), now = make("div", "pv-now", { hidden: "", "aria-live": "polite" }, make("div", "hint", {}, "You, now"), nowText);
+  // The phrase being said, as far as the voice has heard it: the question to come, over
+  // the cloud and above its caption. Its last lines show when it is long.
+  const nowText = make("p", ""), now = make("div", "pv-now", { hidden: "", "aria-live": "polite" }, nowText);
+  stage.append(now);
   const voicesBox = make("div", "pv-voices"), voicesPart = make("div", "border-t border-zinc-200 px-5 py-3 dark:border-zinc-800", { hidden: "" },
     make("p", "hint mb-2", {}, "Voices in this dialog: name one and Prophet knows who says what."), voicesBox);
   const side = make("section", "panel pv-side",
     {}, make("div", "flex items-center gap-3 px-5 py-4", {},
       make("div", "mr-auto", {}, make("h3", "section-title", {}, "The dialog"), make("p", "hint mt-1", {}, "What is said in the chat meanwhile."))),
-    voicesPart, make("div", "border-t border-zinc-200 px-5 py-3 dark:border-zinc-800", {}, problem, said, now));
+    voicesPart, make("div", "border-t border-zinc-200 px-5 py-3 dark:border-zinc-800", {}, problem, said));
   side.firstChild.append(pageButton);
   const view = make("div", "pv-view", {}, stage, side);
   const shown = prophet.ui.page({ id: "dialog", title: "Voice", icon: "wave", render(body) { body.append(view); startOrb(); } });

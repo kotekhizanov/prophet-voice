@@ -45,9 +45,11 @@ Everything runs on this machine (a Mac with a microphone and speakers):
   yours), and goes to the chat once Prophet has finished or you stopped it.
   A phrase that is mostly what Prophet was reading then is its own voice
   heard back, and is not sent.
-- While you speak, Whisper hears the phrase so far about once a second, and
-  the dialog's page shows it as you say it («You, now»); the whole phrase
-  goes to the chat at its end, as before.
+- A Private phrase is heard as you say it, not once you have ended. The
+  dialog's page shows it over the cloud, above its caption: Vosk's words at once, rough, and
+  Whisper's in their place part by part. At each pause of half a second
+  the part before it goes to Whisper while you go on, so when the phrase
+  ends only its last part is left to hear, and the question is sent sooner.
 - A cancel word («Пророк, отмена») sends nothing and cancels the answer
   being prepared. Said over Prophet while it reads («стоп», if you added
   it), it hushes Prophet and cancels the rest of the answer: Vosk listens

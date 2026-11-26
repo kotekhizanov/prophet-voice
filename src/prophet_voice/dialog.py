@@ -6,7 +6,7 @@ points that breathes, thinks and speaks. It talks to `prophet-voice run`
 through the settings server on this machine: `POST /dialog` begins, changes
 or ends the dialog, and `GET /dialog/events` streams how the voice is now
 (Server-Sent Events): what it does, how loud the owner and Prophet are, its
-wake word for the captions, the phrase being said as far as Whisper has it
+wake word for the captions, the phrase being said as far as it is heard
 (`text`), and in a Private dialog the voices heard in
 it (speakers.py), which the page may name (`POST /dialog/voice`).
 
@@ -42,7 +42,7 @@ class Dialog:
             "mic": round(ears.level, 3) if ears is not None else 0.0,
             "voice": round(v.mouth.level, 3),
             "wake": v.words["wake"],
-            "text": v.live,
+            "text": v.showing(),
             "voices": v.speakers.voices.shown() if v.speakers and v.private else [],
         }
 

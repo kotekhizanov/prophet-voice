@@ -25,8 +25,16 @@ dropped here, unsaid and unsent. Once a word is heard, `on_begun` says so.
 With the `echo` that takes Prophet's voice out of the audio, the owner may
 speak over Prophet when alone: a phrase begins while Prophet reads, from the
 blocks the echo says were not Prophet's alone (`kept` of OVER_KEPT or more).
-Such a phrase (`over`) has no cue, and `on_phrase` is told of it. `so_far`
-is the phrase being heard, for its text to be shown as it is said.
+Such a phrase (`over`) has no cue, and `on_phrase` is told of it.
+
+A phrase said when alone is heard as it is said. Vosk's whole vocabulary
+goes on listening after the first word: `text` is its words so far, rough
+but at once, for the page to show. And at each pause of CUT_AFTER seconds
+in a phrase with PART_MIN seconds since the last cut, the part up to it is
+given to `on_part` (its audio, and how many of Vosk's words it has): Whisper
+hears it while the owner goes on, so only the last part, given as the phrase
+ends, is left to hear then. `on_part(None, 0)` says a phrase with parts was
+dropped.
 
 Whether someone speaks is the loudness above VOICE_FROM against the room's
 quiet: a bus's rumble and a room's hum stay mostly below it, a voice does not.
@@ -68,6 +76,8 @@ MAX_PHRASE = 60  # seconds
 DEAF = 0.5  # seconds after Prophet speaks: its echo dies out
 ONSET = 0.3  # seconds of voice that begin a phrase when alone
 PRE_ROLL = 0.6  # seconds kept from before it: the first syllable starts quieter
+CUT_AFTER = 0.5  # seconds of quiet inside a phrase at which a part of it is cut off
+PART_MIN = 3.0  # seconds a part is at least
 OVER_KEPT = 0.2  # of a block's power that was not Prophet's, for the owner to be in it
 CONFIRM_WITHIN = 3  # seconds for Vosk to hear a word in a sound before it is dropped
 VOSK_MODEL = "vosk-model-small-ru-0.22"
@@ -97,6 +107,7 @@ class Ears:
         on_begun=None,
         on_stop=None,
         echo=None,
+        on_part=None,
     ):
         """`recognizer(grammar)` makes a Vosk recognizer (`VoskRecognizer`); a
         grammar of None is Vosk's whole vocabulary. `mouth` says whether
@@ -111,7 +122,11 @@ class Ears:
         self.stop = None  # the cancel words' grammar, while Prophet reads
         self.echo = echo  # says how much of a block was not Prophet's (`kept`)
         self.over = False  # the phrase going on began over Prophet's voice
-        self.phrase_no = 0  # phrases begun so far
+        self.on_part = on_part or (lambda audio, words: None)
+        self.said: list[str] = []  # the words of Vosk's finished utterances in the phrase
+        self.text = ""  # the phrase so far, as Vosk has it
+        self.cut = 0  # blocks of the phrase already given to `on_part`
+        self.cut_at = 0.0  # the clock at the last cut, or the phrase's start
         self.clock = 0.0  # seconds of audio heard, as Vosk's word times count them
         self.state = "waiting"  # or "phrase"
         self.recent: deque[tuple[float, bytes]] = deque()
@@ -159,14 +174,6 @@ class Ears:
         if self.state == "phrase" or not self.mouth.speaking:
             return True
         return self.alone and self.echo is not None
-
-    def so_far(self) -> tuple[int, bytes, float] | None:
-        """The phrase being heard (from another thread): its number, its audio so
-        far and the seconds since a voice was in it. None when there is none,
-        or no word was heard in it yet."""
-        if self.state != "phrase" or self.tentative:
-            return None
-        return self.phrase_no, wav(list(self.phrase)), self.clock - self.last_voice
 
     def hear(self, block: bytes) -> None:
         seconds, at = len(block) / 2 / RATE, self.clock
@@ -217,6 +224,9 @@ class Ears:
                 if since > CONFIRM_WITHIN or self.clock - self.last_voice > END_SILENCE:
                     self._wait()  # a sound with no word in it: nothing was said
                 return
+        elif self.alone:
+            self._words(block)
+            self._cuts(seconds)
         spoke = self.voiced > 0.25
         if not spoke and since > (self.free_for or NO_PHRASE):
             self._drop()
@@ -272,12 +282,15 @@ class Ears:
         """A phrase from `start` on: from the ring, then each new block."""
         self.phrase = [b for at, b in self.recent if at + len(b) / 2 / RATE > start]
         self.state, self.free_for, self.over = "phrase", free_for, False
-        self.phrase_no += 1
+        self.said, self.text, self.cut, self.cut_at = [], "", 0, start
         self.woke_at = self.last_voice = start
         self.voiced = 0.0
         self.recent.clear()
 
-    def _wait(self) -> None:
+    def _wait(self, sent: bool = False) -> None:
+        if self.cut and not sent:  # its parts are of no phrase now
+            self.on_part(None, 0)
+        self.said, self.text, self.cut = [], "", 0
         self.state, self.phrase, self.free_for = "waiting", [], 0.0
         self.waiting_since = self.clock
         self.tentative, self.check, self.onset, self.over = False, None, 0.0, False
@@ -290,7 +303,9 @@ class Ears:
 
     def _send(self) -> None:
         audio, free, over = wav(self.phrase), bool(self.free_for), self.over
-        self._wait()
+        if self.cut and self.last_voice > self.cut_at:  # the rest of it is its last part
+            self.on_part(wav(self.phrase[self.cut :]), len(self.text.split()))
+        self._wait(sent=True)
         self.on_phrase(audio, free, over)
 
     # ---- alone: speech begins a phrase ------------------------------------------------
@@ -312,19 +327,43 @@ class Ears:
         for b in list(self.phrase):
             if self.tentative:
                 self._confirm(b)
+            else:
+                self._words(b)
 
     def _confirm(self, block: bytes | None) -> None:
         """A tentative phrase is one once Vosk hears a word in it (None: its end)."""
-        if block is None:
-            text = " ".join(w["word"] for w in self.check.final())
-        else:
-            found = self.check.accept(block)
-            text = self.check.partial() if found is None else " ".join(w["word"] for w in found)
-        if not is_speech(text):
+        self._words(block)
+        if not is_speech(self.text):
             return
-        self.tentative, self.check = False, None
+        self.tentative = False
         if not self.over:  # a cue would wait for Prophet to end, and then be late
             self.on_begun()
+
+    def _words(self, block: bytes | None) -> None:
+        """Vosk's whole vocabulary hears the phrase as it is said (None: its end)."""
+        if self.check is None:
+            self.check = self.recognizer(None)
+        found = self.check.final() if block is None else self.check.accept(block)
+        if found is None:
+            now = self.check.partial().split()
+        else:
+            self.said += [w["word"] for w in found]
+            now = []
+        self.text = " ".join([*self.said, *now])
+
+    def _cuts(self, seconds: float) -> None:
+        """A pause in a phrase long enough: the part up to its middle goes to
+        Whisper now, while the owner goes on."""
+        quiet = self.clock - self.last_voice
+        if not CUT_AFTER <= quiet < CUT_AFTER + seconds:  # once, as the pause gets this long
+            return
+        if self.last_voice - self.cut_at < PART_MIN:
+            return
+        upto = len(self.phrase) - int(quiet / 2 / seconds)
+        if upto <= self.cut:
+            return
+        part, self.cut, self.cut_at = wav(self.phrase[self.cut : upto]), upto, self.clock
+        self.on_part(part, len(self.text.split()))
 
     # ---- loudness ---------------------------------------------------------------------
 
