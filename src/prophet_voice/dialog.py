@@ -13,7 +13,8 @@ it (speakers.py), which the page may name (`POST /dialog/voice`).
 A dictation (voice.py) is asked for here too: `POST /dictation` begins or
 ends one for a page, and the stream's `dictation` has its phrases, numbered,
 for that page to put into the field where the cursor is: `count` of them so
-far and the last few (`phrases`), so none is missed between two snapshots.
+far and the last few (`phrases`), so none is missed between two snapshots,
+and the phrase being said (`text`), which the page types as it is heard.
 It ends with its page's stream as a dialog does.
 
 A dialog belongs to the page that began it (each page names itself, `page`)
@@ -55,15 +56,22 @@ class Dialog:
         }
 
     def dictated(self) -> dict | None:
-        """The latest dictation, for its page: whether it is on, and its phrases."""
-        d = self.voice.dictation
+        """The latest dictation, for its page: whether it is on, its phrases, how
+        many were said (`said`: those past `count` are Whisper's still), and the
+        one being said now as far as it is heard (`text`)."""
+        v = self.voice
+        d = v.dictation
         if d is None:
             return None
         phrases = list(d["phrases"])
+        ears = v.ears
+        saying = d["on"] and ears is not None and ears.state == "phrase" and not ears.tentative
         return {
             "page": d["page"],
             "n": d["n"],
             "on": d["on"],
+            "said": max(d["said"], len(phrases)),
+            "text": v.showing() if saying else "",
             "count": len(phrases),
             "phrases": phrases[-DICTATED:],
         }

@@ -219,10 +219,10 @@ settings (Listening, Heard).
 While the voice runs, the text field that has the cursor in Omniscient (the
 message field, a goal, a task, notes: any textarea or text input, but a
 password) shows a small round microphone at its right edge. Press it and
-speak: the Mac's microphone opens, the phrase shows under the field as far
-as it is heard, and at each pause its text, as Whisper has it, is typed
-where the cursor is. You may go on typing meanwhile, or move the cursor to
-another field: the text follows it.
+speak: the Mac's microphone opens, and what you say is typed where the
+cursor is as far as it is heard; at each pause Whisper's text of the phrase
+takes its place. You may go on typing meanwhile, or move the cursor to
+another field: the next phrase begins where the cursor is.
 
 The button again or Esc ends it, and the phrase you were saying still
 comes. It also ends after a minute with nothing said, when the field goes

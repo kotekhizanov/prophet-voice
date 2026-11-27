@@ -158,7 +158,13 @@ class Voice:
                 self.dictation["on"] = True  # the page's own goes on: a late phrase still comes
             else:
                 self.dictations += 1
-                self.dictation = {"page": page, "n": self.dictations, "on": True, "phrases": []}
+                self.dictation = {
+                    "page": page,
+                    "n": self.dictations,
+                    "on": True,
+                    "said": 0,  # phrases of it given to Whisper
+                    "phrases": [],  # their texts as they come: "" for one with none
+                }
             self.configure(config.with_plugin(config.load(), self.from_omniscient)[0])
             self.mouth.hush()  # what Prophet reads would be heard as the owner's
             if self.ears is not None:
@@ -283,6 +289,8 @@ class Voice:
             self.mouth.cue(words.pick(self.words["heard"]), CUE_VOLUME["heard"])
         parts, self.parts = self.parts, []
         dictation = None if self.dialog else self.dictation  # whose phrase it is
+        if dictation is not None:
+            dictation["said"] += 1
         self.loop.call_soon_threadsafe(
             self.phrases.put_nowait, (audio, free, self.era, over, parts, dictation)
         )
@@ -340,6 +348,8 @@ class Voice:
         is, and not a question."""
         era = self.era if era is None else era
         if era != self.era:
+            if dictation is not None:
+                dictation["phrases"].append("")
             return
         self.hearing_now += 1
         try:
@@ -406,10 +416,13 @@ class Voice:
     async def _dictated(self, audio: bytes, parts, dictation: dict) -> None:
         """A dictated phrase: its text is the page's, for the field. It is not
         written to the log: it may be anything the owner types."""
-        text = words.alone(await asyncio.to_thread(self._whole, audio, parts), self.words)
-        log.info("dictated %s characters", len(text))
-        if text and self.dictation is dictation:  # not one a dialog has dropped since
-            dictation["phrases"].append(text)
+        text = ""
+        try:
+            text = words.alone(await asyncio.to_thread(self._whole, audio, parts), self.words)
+            log.info("dictated %s characters", len(text))
+        finally:  # each phrase said has its text, so the page knows which are to come
+            # (none of a dictation a dialog has dropped since)
+            dictation["phrases"].append(text if self.dictation is dictation else "")
 
     async def _cancel(self) -> None:
         """The answer being prepared is cancelled in the core."""

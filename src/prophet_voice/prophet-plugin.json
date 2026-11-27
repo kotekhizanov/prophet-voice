@@ -1,7 +1,7 @@
 {
   "id": "voice",
   "name": "Voice",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "api_version": 1,
   "description": "Talk to Prophet aloud in a Private dialog, and dictate into any text field.",
   "homepage": "https://github.com/kotekhizanov/prophet-voice",

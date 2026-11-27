@@ -10,6 +10,7 @@ class Voice:
         self.dialog = None
         self.dictation = None
         self.dictated = []
+        self.ears = None
 
     def set_dialog(self, kind, project=None):
         self.set_to.append((kind, project))
@@ -91,8 +92,19 @@ def test_a_dictation_shows_its_latest_phrases():
     voice = Voice()
     d = Dialog(voice)
     assert d.dictated() is None
-    voice.dictation = {"page": "mine", "n": 2, "on": True, "phrases": [str(i) for i in range(8)]}
-    assert d.dictated() == {
-        "page": "mine", "n": 2, "on": True, "count": 8, "phrases": ["3", "4", "5", "6", "7"]
+    voice.dictation = {
+        "page": "mine", "n": 2, "on": True, "said": 9, "phrases": [str(i) for i in range(8)]
     }  # fmt: skip
+    assert d.dictated() == {
+        "page": "mine", "n": 2, "on": True, "said": 9, "text": "",
+        "count": 8, "phrases": ["3", "4", "5", "6", "7"],
+    }  # fmt: skip
+
+    class Ears:
+        state, tentative = "phrase", False
+
+    voice.ears, voice.showing = Ears(), lambda: "найди почему"
+    assert d.dictated()["text"] == "найди почему"  # the phrase being said, for the field
+    voice.dictation["on"] = False
+    assert d.dictated()["text"] == ""
     voice.loop.close()

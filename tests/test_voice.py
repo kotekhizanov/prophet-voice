@@ -791,6 +791,7 @@ def test_a_dictated_phrase_is_the_pages_and_not_the_chats():
 
     asyncio.run(go())
     assert v.dictation["phrases"] == ["Найди, почему упали заказы.", "И пришли отчёт."]
+    assert v.dictation["said"] == 2  # each phrase said has its text, even an empty one
     assert core.calls == [] and v.mouth.said == ["hush"]
 
 
@@ -820,7 +821,7 @@ def test_no_dictation_in_a_dialog_and_a_dialog_ends_one():
         v.on_phrase(b"", True)
         v.set_dialog("private")  # what was being dictated is dropped
         await v.handle(*await v.phrases.get())
-        assert was["phrases"] == [] and v.microphone.is_set() and v.ears.alone
+        assert was["phrases"] == [""] and v.microphone.is_set() and v.ears.alone
         if v.beginning is not None:
             await v.beginning
 

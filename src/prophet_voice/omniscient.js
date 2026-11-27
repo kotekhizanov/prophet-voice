@@ -249,10 +249,11 @@ function drawSettings(prophet, body, values, saved) {
 // A small round button of the script's own floats at the right edge of the text field
 // that has the cursor: any textarea, text input or editable text of Omniscient, but a
 // password. Pressed, it has the voice open the Mac's microphone (POST /dictation), and
-// each phrase the owner says comes back in the voice's stream once Whisper has heard it
-// and is typed where the cursor is, as the keyboard would. Under the field, the phrase as
-// far as it is heard. The button again or Esc ends it; so does a minute with nothing
-// said, the field going away, or this page closing. Nothing goes to the chat.
+// what the owner says is typed where the cursor is, as the keyboard would: the phrase as
+// far as it is heard while it is said, and in its place Whisper's text of it once that
+// comes. A note under the field only says what is wrong. The button again or Esc ends
+// it; so does a minute with nothing said, the field going away, or this page closing.
+// Nothing goes to the chat.
 const DICTATE_STYLE = `
 .pv-mic,.pv-heard{position:fixed;left:0;top:0;z-index:2147483000;display:none}
 .pv-mic{align-items:center;justify-content:center;width:1.625rem;height:1.625rem;padding:0;border-radius:9999px;border:1px solid rgb(212 212 216);background:#fff;color:rgb(82 82 91);box-shadow:0 1px 2px rgb(0 0 0/.08);opacity:.7;cursor:pointer;transition:opacity .15s,background-color .15s,color .15s}
@@ -274,24 +275,52 @@ function dictatable(el) {
   return el.isContentEditable;
 }
 
-// The text goes where the cursor is, after a space when it follows a word. As typing:
-// the field's own listeners hear it, and the browser's undo takes it back.
+// Editable text that is not a field: a phrase goes where the cursor is once it is whole,
+// after a space when it follows a word.
 function typeInto(el, text) {
   if (!el?.isConnected || !text) return;
-  if (el.isContentEditable) {
-    if (document.activeElement !== el) el.focus();
-    const had = el.textContent;
-    document.execCommand("insertText", false, (had && !/\s$/.test(had) ? " " : "") + text);
-    return;
-  }
-  const value = el.value, from = el.selectionStart ?? value.length, to = el.selectionEnd ?? from;
-  const before = value.slice(0, from);
-  let add = (before && !/\s$/.test(before) ? " " : "") + text;
-  if (el.maxLength > 0) add = add.slice(0, Math.max(0, el.maxLength - value.length + (to - from)));
-  if (!add) return;
-  if (document.activeElement === el && document.execCommand("insertText", false, add)) return;
-  el.setRangeText(add, from, to, "end");
-  el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: add }));
+  if (document.activeElement !== el) el.focus();
+  const had = el.textContent;
+  document.execCommand("insertText", false, (had && !/\s$/.test(had) ? " " : "") + text);
+}
+
+// What is being dictated into a textarea or an input: a stretch of its text that begins
+// where the cursor was, after a space when it follows a word. `settled` is Whisper's
+// text, which stays; `rough` is what is heard so far of the phrases Whisper has not
+// given yet, and is written over as it changes. Only what differs is replaced, and the
+// field's own listeners hear it as typing.
+function stretch(el) {
+  let from = el.selectionStart ?? el.value.length, wrote = "";
+  const cut = el.selectionEnd ?? from;  // a selection is typed over
+  if (cut > from) { el.setRangeText("", from, cut, "end"); }
+  return {
+    el,
+    write(settled, rough) {
+      if (!el.isConnected) return false;
+      let value = el.value;
+      if (value.substr(from, wrote.length) !== wrote) {  // the owner has typed meanwhile
+        const at = wrote ? value.indexOf(wrote) : -1;
+        if (at < 0) return false;  // into the stretch itself: it is theirs now
+        from = at;
+      }
+      const before = value.slice(0, from), gap = before && !/\s$/.test(before) ? " " : "";
+      let keep = settled ? gap + settled : "";
+      let text = keep + (rough ? (keep ? " " : gap) + rough : "");
+      if (el.maxLength > 0) text = text.slice(0, Math.max(0, el.maxLength - value.length + wrote.length));
+      keep = keep.slice(0, text.length);
+      if (text !== wrote) {
+        let same = 0;
+        while (same < text.length && same < wrote.length && text[same] === wrote[same]) same++;
+        const caret = el.selectionStart ?? 0, inside = caret >= from && caret <= from + wrote.length;
+        el.setRangeText(text.slice(same), from + same, from + wrote.length, inside ? "end" : "preserve");
+        el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text.slice(same) }));
+        if (inside && document.activeElement === el && el instanceof HTMLTextAreaElement
+          && el.selectionStart === el.value.length) el.scrollTop = el.scrollHeight;
+      }
+      from += keep.length; wrote = text.slice(keep.length);  // what is settled is the field's
+      return true;
+    },
+  };
 }
 
 function dictation(prophet, voiceAt, page) {
@@ -308,12 +337,13 @@ function dictation(prophet, voiceAt, page) {
   let on = false;       // this page dictates
   let asked = 0;        // when this page last began or ended it (performance.now)
   let serial = 0, have = 0;  // the voice's dictation and how many of its phrases are typed
+  let rough = new Map();     // of its phrases not typed yet, by number: as far as heard
+  let draft = null;          // where they are typed: a stretch of a field's text
+  let silent = 0;            // since when no phrase is being said (0: one is)
   let lastHeard = 0;    // when something was last said
   let problem = "", problemUntil = 0, raf = 0;
 
   const mine = () => (voice?.dictation?.page === page ? voice.dictation : null);
-  // After it ends, its last phrase is still Whisper's for a moment.
-  const pending = () => !on && !!mine() && voice.state === "hearing";
   function rect() {
     if (!target?.isConnected) return null;
     const r = target.getBoundingClientRect();
@@ -326,8 +356,7 @@ function dictation(prophet, voiceAt, page) {
     if (now > problemUntil) problem = "";
     const usable = !!voice && !voice.dialog && !!r;
     const showButton = usable && (on || document.activeElement === target);
-    const text = problem || (!usable ? "" : on ? voice.text || (voice.state === "hearing" ? "Processing voice…" : "Speak…")
-      : pending() ? "Processing voice…" : "");
+    const text = problem;
     button.style.display = showButton ? "flex" : "none";
     note.style.display = text && r ? "block" : "none";
     if (!showButton && !(text && r)) return;  // woken again by the cursor or the voice
@@ -367,18 +396,42 @@ function dictation(prophet, voiceAt, page) {
   addEventListener("pagehide", () => { if (on) navigator.sendBeacon(`${voiceAt}/dialog/end`); });
   if (dictatable(document.activeElement)) target = document.activeElement;
 
+  // The dictation's phrases go into the field: those Whisper has given for good, and
+  // after them those it has not, as far as they are heard.
+  function type(d, now) {
+    if (d.n !== serial) { serial = d.n; have = 0; rough = new Map(); draft = null; silent = 0; }
+    const fresh = d.count > have ? d.phrases.slice(-(d.count - have)).filter(Boolean) : [];
+    if (d.count > have) lastHeard = now;
+    for (let i = have; i < d.count; i++) rough.delete(i);
+    have = d.count;
+    // The phrase being said. One that ends unsent (a cough) leaves nothing behind; one
+    // that is sent is `said` a moment after its text is gone, so that is waited for.
+    if (d.text) { rough.set(d.said, d.text); silent = 0; }
+    else if (rough.has(d.said)) {
+      if (!silent) silent = now;
+      else if (now - silent > 400) rough.delete(d.said);
+    }
+    const settled = fresh.join(" ");
+    const heard = [...rough.keys()].sort((a, b) => a - b).map((i) => rough.get(i)).join(" ");
+    if (!draft && !settled && !heard) return;
+    if (!draft && target?.isConnected && target.isContentEditable) {
+      for (const text of fresh) typeInto(target, text);
+      return;
+    }
+    if (!draft || !draft.write(settled, heard)) {  // a new one where the cursor is now
+      draft = target?.isConnected && !target.isContentEditable ? stretch(target) : null;
+      if (draft && !draft.write(settled, heard)) draft = null;
+    }
+    if (!heard) draft = null;  // all of it is typed: the next begins where the cursor is
+  }
+
   // Each snapshot of the voice's stream (null: it does not answer).
   function follow(snapshot) {
     voice = snapshot;
     const now = performance.now(), d = mine();
     if (!voice) { on = false; return; }
     if (d) {
-      if (d.n !== serial) { serial = d.n; have = 0; }
-      if (d.count > have) {
-        const fresh = d.phrases.slice(-(d.count - have));
-        have = d.count; lastHeard = now;
-        for (const text of fresh) { try { typeInto(target, text); } catch (err) { console.error("voice: dictation", err); } }
-      }
+      try { type(d, now); } catch (err) { console.error("voice: dictation", err); }
     }
     if (now - asked > SETTLE * 1000) on = !!d?.on;  // ended elsewhere: a dialog began, the voice restarted
     if (on) {
